@@ -4,26 +4,27 @@
 @import './variables.css' layer(theme);
 
 @import './common.css' layer(utilities);
+@import './media.css' layer(utilities);
 @import './keyframes-animation.css' layer(utilities);
-@import './dark-mode.css' layer(utilities);
 @import './recorder.css' layer(utilities);
 
-@import './media_screens/min_1024.css' layer(utilities);
-@import './media_screens/max_w_980_max_h_450.css' layer(utilities);
-@import './media_screens/max_h_720.css' layer(utilities);
-@import './media_screens/max_1640.css' layer(utilities);
-@import './media_screens/max_1279.css' layer(utilities);
-@import './media_screens/max_1023.css' layer(utilities);
-@import './media_screens/max_767.css' layer(utilities);
-@import './media_screens/min_641.css' layer(utilities);
-@import './media_screens/max_640.css' layer(utilities);
-@import './media_screens/max_370.css' layer(utilities);
-@import './media_screens/min_1800.css' layer(utilities);
-@import './media_screens/max_1025.css' layer(utilities);
-@import './media_screens/min_641_max_1025.css' layer(utilities);
-@import './media_screens/h-max-800.css' layer(utilities);
-
 @custom-variant dark (&:is(.dark *));
+
+@utility sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+@utility focus-ring {
+  @apply focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-Blue;
+}
 
 /*
   The default border color has changed to `currentcolor` in Tailwind CSS v4,
@@ -33,19 +34,22 @@
   If we ever want to remove these styles, we need to add an explicit border
   color utility to any element that depends on these defaults.
 */
-:root {
-  --toastify-color-info: #7C3AED !important;     /* primary */
-  --toastify-color-success: #22c55e !important;  /* green */
-  --toastify-color-warning: #facc15 !important;  /* amber */
-  --toastify-color-error: #ef4444 !important;    /* red */
-  --toastify-color-progress-light: linear-gradient(
-    to right,
-    #7C3AED,
-    #C084FC
-  ) !important;
-}
-
 @layer base {
+  html,
+  body,
+  #plugNmeet-app {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-weight: 400;
+  }
+
   *,
   ::after,
   ::before,
@@ -53,41 +57,4 @@
   ::file-selector-button {
     border-color: var(--color-gray-200, currentcolor);
   }
-}
-.custom-range-container {
-  width: 100%;
-  user-select: none;
-}
-.custom-range-track {
-  position: relative;
-  width: 100%;
-  border-radius: 10px;
-  cursor: pointer;
-  touch-action: none;
-}
-.custom-range-fill {
-  position: absolute;
-  left: 0;
-  top: 0;
-  border-radius: 10px 0 0 10px;
-  pointer-events: none;
-}
-.custom-range-thumb {
-  position: absolute;
-  top: 50%;
-  border-radius: 50%;
-  cursor: pointer;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-  transition: transform 0.1s ease;
-  z-index: 2;
-}
-.custom-range-value {
-  margin-top: 10px;
-  text-align: center;
-  font-family: Arial, sans-serif;
-  font-size: 16px;
-  color: #333;
-}
-.aspect-video {
-  aspect-ratio: 16 / 9;
 }

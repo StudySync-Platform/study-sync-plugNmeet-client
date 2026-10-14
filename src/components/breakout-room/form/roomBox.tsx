@@ -11,13 +11,15 @@ interface IRoomBoxProps {
   roomId: number;
   name: string;
   users: Array<UserType>;
+  customTitles?: Record<number, string>;
+  setCustomTitles?: React.Dispatch<React.SetStateAction<Record<number, string>>>;
 }
 
 interface DragItem {
   id: string;
 }
 
-const RoomBox = ({ roomId, name, users }: IRoomBoxProps) => {
+const RoomBox = ({ roomId, name, users, customTitles, setCustomTitles }: IRoomBoxProps) => {
   const dispatch = useAppDispatch();
   const ref = useRef<HTMLDivElement>(null);
 
@@ -41,25 +43,37 @@ const RoomBox = ({ roomId, name, users }: IRoomBoxProps) => {
   const isDropTarget = canDrop && isOver;
 
   const roomBoxClasses = clsx(
-    'roomBox scrollBar scrollBar2 overflow-hidden overflow-y-auto h-60 w-full sm:w-52 lg:w-[13.2rem] xl:w-55 ltr:mr-4 lg:ltr:mr-6 rtl:ml-4 lg:rtl:ml-6 mb-2 sm:mb-6 border border-solid border-Gray-300',
+    'roomBox scrollBar scrollBar2 overflow-hidden overflow-y-auto h-60 w-full sm:w-52 lg:w-[13.2rem] xl:w-55 me-4 lg:me-6 mb-2 sm:mb-6 border border-solid border-Gray-300 dark:border-Gray-800',
     {
       'bg-primary-color': isDropTarget,
       'bg-secondary-color': canDrop && !isDropTarget,
-      'bg-white': !canDrop,
+      'bg-white dark:bg-dark-primary': !canDrop,
     },
   );
 
-  const headerClasses = clsx(
-    'text-sm sm:text-base px-2 py-1 border-b-2 border-solid',
-    {
-      'text-white border-white': canDrop,
-      'text-black border-black': !canDrop,
-    },
-  );
+  const headerClasses = clsx('text-sm sm:text-base px-2 py-1 border-b-2 border-solid', {
+    'text-white border-white dark:border-white': canDrop,
+    'text-Gray-950 dark:text-white border-black dark:border-Gray-800': !canDrop,
+  });
 
   return (
     <div ref={ref} className={roomBoxClasses}>
-      <p className={headerClasses}>{name}</p>
+      {roomId !== 0 ? (
+        <input
+          className="text-sm sm:text-base px-2 py-1 border-b-2 border-solid border-black dark:border-Gray-800 w-full bg-transparent text-Gray-950 dark:text-white outline-hidden focus:border-[rgba(0,161,242,1)]"
+          placeholder={name}
+          value={customTitles?.[roomId] ?? ''}
+          onChange={(e) => {
+            const value = e.currentTarget.value;
+            setCustomTitles?.((prev) => ({
+              ...prev,
+              [roomId]: value,
+            }));
+          }}
+        />
+      ) : (
+        <p className={headerClasses}>{name}</p>
+      )}
       {users.map((user) => {
         return <UserBox key={user.id} name={user.name} id={user.id} />;
       })}

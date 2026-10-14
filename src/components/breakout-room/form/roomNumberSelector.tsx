@@ -8,15 +8,12 @@ interface RoomNumberSelectorProps {
   setTotalRooms: (num: number) => void;
 }
 
-const RoomNumberSelector = ({
-  totalRooms,
-  setTotalRooms,
-}: RoomNumberSelectorProps) => {
+const RoomNumberSelector = ({ totalRooms, setTotalRooms }: RoomNumberSelectorProps) => {
   const { t } = useTranslation();
   const maxRooms = useAppSelector(
     (state) =>
-      state.session.currentRoom.metadata?.roomFeatures?.breakoutRoomFeatures
-        ?.allowedNumberRooms ?? 6,
+      state.session.currentRoom.metadata?.roomFeatures?.breakoutRoomFeatures?.allowedNumberRooms ??
+      6,
   );
 
   const options: ISelectOption[] = Array.from({ length: maxRooms }, (_, i) => ({
@@ -25,7 +22,7 @@ const RoomNumberSelector = ({
   }));
 
   return (
-    <div className="numbers-of-room w-full sm:w-56 mb-2 sm:ltr:mr-10 sm:rtl:ml-10">
+    <div className="numbers-of-room w-full sm:w-56 mb-2 sm:me-10">
       <Dropdown
         id="breakout-room-number"
         label={t('breakout-room.num-rooms')}

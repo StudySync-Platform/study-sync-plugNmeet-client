@@ -7,31 +7,29 @@ import {
   CreatePollReqSchema,
   PollResponse,
   PollResponseSchema,
+  ReopenPollReq,
+  ReopenPollReqSchema,
   SubmitPollResponseReq,
   SubmitPollResponseReqSchema,
 } from 'plugnmeet-protocol-js';
 
 import { handleProtobufResponse, renewTokenOnError } from './utils';
 import { RootState } from '../index';
+import { getConfigValue } from '../../helpers/utils';
 
 export const pollsApi = createApi({
   reducerPath: 'pollsApi',
   baseQuery: fetchBaseQuery({
-    baseUrl: (window as any).PLUG_N_MEET_SERVER_URL + '/api/polls',
+    baseUrl:
+      getConfigValue<string>('serverUrl', 'http://localhost:8080', 'PLUG_N_MEET_SERVER_URL') +
+      '/api/polls',
     prepareHeaders: (headers, { getState }) => {
       const token = (getState() as RootState).session.token;
       headers.append('Authorization', token);
       return headers;
     },
   }),
-  tagTypes: [
-    'List',
-    'PollsStats',
-    'Count',
-    'Selected',
-    'PollDetails',
-    'PollResult',
-  ],
+  tagTypes: ['List', 'PollsStats', 'Count', 'Selected', 'PollDetails', 'PollResult'],
   endpoints: (builder) => ({
     getPollLists: builder.query<PollResponse, void>({
       query: () => {
@@ -57,10 +55,7 @@ export const pollsApi = createApi({
           : ['Count'];
       },
     }),
-    getUserSelectedOption: builder.query<
-      PollResponse,
-      { pollId: string; userId: string }
-    >({
+    getUserSelectedOption: builder.query<PollResponse, { pollId: string; userId: string }>({
       query: ({ pollId, userId }) => {
         return {
           url: `userSelectedOption/${pollId}/${userId}`,
@@ -152,6 +147,18 @@ export const pollsApi = createApi({
       transformErrorResponse: renewTokenOnError,
       invalidatesTags: ['List', 'PollsStats'],
     }),
+    reopenPoll: builder.mutation<PollResponse, ReopenPollReq>({
+      query(body) {
+        return {
+          url: 'reopen',
+          method: 'POST',
+          body: toBinary(ReopenPollReqSchema, body),
+          responseHandler: handleProtobufResponse(PollResponseSchema),
+        };
+      },
+      transformErrorResponse: renewTokenOnError,
+      invalidatesTags: ['List', 'PollsStats'],
+    }),
   }),
 });
 
@@ -163,6 +170,7 @@ export const {
   useCreatePollMutation,
   useAddResponseMutation,
   useClosePollMutation,
+  useReopenPollMutation,
   useGetPollResponsesResultQuery,
   useGetPollsStatsQuery,
 } = pollsApi;

@@ -1,20 +1,22 @@
-import { BackgroundConfig } from '../../../components/virtual-background/helpers/backgroundHelper';
-
 export type DeviceOrientation = 'landscape' | 'portrait';
+
+export type SidePanelType = 'CHAT' | 'PARTICIPANTS' | 'POLLS' | 'BREAKOUT_ROOMS' | null;
 
 export interface IBottomIconsSlice {
   isActiveMicrophone: boolean;
   isActiveWebcam: boolean;
-  isActiveChatPanel: boolean;
-  isActiveParticipantsPanel: boolean;
-  isActivePollsPanel: boolean;
   isActiveRaisehand: boolean;
   isActiveRecording: boolean;
   isActiveScreenshare: boolean;
   isActiveSharedNotePad: boolean;
   isActiveWhiteboard: boolean;
+  isActiveInsightsAiTextChat: boolean;
+
+  activeSidePanel: SidePanelType;
 
   isMicMuted: boolean;
+  /** Hybrid: native cam mute while track stays published. Web unused (empty-stream mute). */
+  isWebcamMuted: boolean;
   screenWidth: number;
   screenHeight: number;
   deviceOrientation: DeviceOrientation;
@@ -30,8 +32,8 @@ export interface IBottomIconsSlice {
   showDisplayExternalLinkModal: boolean;
   showSpeechSettingsModal: boolean;
   showSpeechSettingOptionsModal: boolean;
+  showInsightsAISettingsModal: boolean;
 
   totalUnreadChatMsgs: number;
-  virtualBackground: BackgroundConfig;
   isEnabledExtendedVerticalCamView: boolean;
 }

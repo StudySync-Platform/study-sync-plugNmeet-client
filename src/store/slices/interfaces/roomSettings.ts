@@ -2,11 +2,18 @@ import { VideoQuality } from 'livekit-client';
 import { Theme } from '@excalidraw/excalidraw/element/types';
 import type { TypeOptions } from 'react-toastify';
 
-import { AzureTokenInfo } from '../../../components/speech-to-text-service/helpers/apiConnections';
+import { AzureTokenInfo } from '../../../components/translation-transcription/helpers/apiConnections';
+import { BackgroundConfig } from '../../../helpers/libs/TrackProcessor';
 
 export enum VideoObjectFit {
   COVER = 'cover',
   CONTAIN = 'contain',
+}
+
+export enum DeviceSessionStorageKeys {
+  AUDIO_DEVICE = 'pnm-selected-audio-device',
+  VIDEO_DEVICE = 'pnm-selected-video-device',
+  VIRTUAL_BACKGROUND = 'pnm-selected-virtualbg',
 }
 
 export interface IRoomSettings {
@@ -18,9 +25,12 @@ export interface IRoomSettings {
   videoDevices: Array<IMediaDevice>;
   selectedAudioDevice: string;
   selectedVideoDevice: string;
+  virtualBackground: BackgroundConfig;
+
   playAudioNotification: boolean;
   activateWebcamsView: boolean;
   activeScreenSharingView: boolean;
+  mediaDegradation: IMediaDegradation;
   allowPlayAudioNotification: boolean;
   roomAudioVolume: number;
   roomScreenShareAudioVolume: number;
@@ -32,6 +42,7 @@ export interface IRoomSettings {
   selectedChatOption: string;
   initiatePrivateChat: InitiatePrivateChat;
   unreadMsgFrom: Array<string>;
+  selectedChatTransLang: string;
 
   columnCameraWidth: ColumnCameraWidth;
   columnCameraPosition: ColumnCameraPosition;
@@ -43,6 +54,16 @@ export interface IRoomSettings {
   focusActiveSpeakerWebcam: boolean;
   selfInsertedE2EESecretKey?: string;
   userNotifications: UserNotification[];
+  isSidePanelOpened: boolean;
+  hasWebcamPages: boolean;
+  maxNumDisplayWebcams: IMaxNumDisplayWebcams;
+}
+
+export interface IMediaDegradation {
+  incomingWebcamPaused: boolean;
+  incomingScreensharePaused: boolean;
+  outgoingCameraPaused: boolean;
+  autoRestoreSuspended: boolean;
 }
 
 export interface IMediaDevice {
@@ -81,9 +102,13 @@ export interface UserNotification {
   autoClose?: number | false;
   created?: number;
   disableToastNotification?: boolean;
+  disablePersistentStorage?: boolean;
 }
 
-export type NotificationCats =
-  | 'new-poll-created'
-  | 'breakout-room-invitation'
-  | 'default';
+export type NotificationCats = 'new-poll-created' | 'breakout-room-invitation' | 'default';
+
+export interface IMaxNumDisplayWebcams {
+  desktop: number;
+  tablet: number;
+  mobile: number;
+}

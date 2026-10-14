@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import { once } from 'es-toolkit';
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import {
+  ClientType,
   NatsSubjects,
   VerifyTokenReqSchema,
   VerifyTokenResSchema,
@@ -12,7 +13,7 @@ import { IErrorPageProps } from '../extra-pages/Error';
 import i18n from '../../helpers/i18n';
 import { getAccessToken } from '../../helpers/utils';
 import { store } from '../../store';
-import { updateIsCloud } from '../../store/slices/sessionSlice';
+import { updateClientType, updateIsCloud } from '../../store/slices/sessionSlice';
 
 declare const IS_PRODUCTION: boolean;
 
@@ -27,8 +28,8 @@ export type roomConnectionStatus =
   | 'receiving-data'
   | 'insert-e2ee-key'
   | 'ready'
-  | 'media-server-conn-start'
-  | 'media-server-conn-established';
+  | 'media-server-conn-established'
+  | 'room-ready';
 
 export interface InfoToOpenConn {
   accessToken: string;
@@ -36,6 +37,7 @@ export interface InfoToOpenConn {
   natsWsUrls: string[];
   roomId: string;
   userId: string;
+  roomStreamName: string;
   natsSubjects: NatsSubjects;
 }
 
@@ -55,10 +57,7 @@ export const verifyToken = once(
         text: i18n.t('app.token-missing-des'),
       });
       return;
-    } else if (
-      window.location.protocol === 'http:' &&
-      window.location.hostname !== 'localhost'
-    ) {
+    } else if (window.location.protocol === 'http:' && window.location.hostname !== 'localhost') {
       setLoading(false);
       setError({
         title: i18n.t('app.require-ssl-title'),
@@ -86,17 +85,20 @@ export const verifyToken = once(
       res.natsWsUrls.length &&
       res.roomId &&
       res.userId &&
+      res.roomStreamName &&
       res.natsSubjects
     ) {
       setOpenConnInfo({
         accessToken: accessToken,
         natsWsUrls: res.natsWsUrls,
+        roomStreamName: res.roomStreamName,
         natsSubjects: res.natsSubjects,
         roomId: res.roomId,
         userId: res.userId,
         serverVersion: res.serverVersion ?? '',
       });
       store.dispatch(updateIsCloud(!!res.isCloud));
+      store.dispatch(updateClientType(res.clientType ?? ClientType.WEB));
 
       if (res.enabledSelfInsertEncryptionKey) {
         setLoading(false);

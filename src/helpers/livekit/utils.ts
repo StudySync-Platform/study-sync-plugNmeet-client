@@ -1,27 +1,32 @@
 import { Dispatch } from 'react';
+import { once } from 'es-toolkit';
 
-import { IConnectLivekit, LivekitInfo } from './types';
+import { IConnectLivekit } from './types';
 import { IErrorPageProps } from '../../components/extra-pages/Error';
 import ConnectLivekit from './ConnectLivekit';
 import { roomConnectionStatus } from '../../components/app/helper';
 
 let currentConnect: IConnectLivekit;
 
-export const createLivekitConnection = (
-  livekitInfo: LivekitInfo,
-  errorState: Dispatch<IErrorPageProps>,
-  roomConnectionStatusState: Dispatch<roomConnectionStatus>,
-  localUserId: string,
-) => {
-  currentConnect = new ConnectLivekit(
-    livekitInfo,
-    errorState,
-    roomConnectionStatusState,
-    localUserId,
-  );
+export const createLivekitConnection = once(
+  (
+    errorState: Dispatch<IErrorPageProps>,
+    roomConnectionStatusState: Dispatch<roomConnectionStatus>,
+    localUserId: string,
+    enabledE2EE: boolean,
+    encryptionKey?: string,
+  ) => {
+    currentConnect = new ConnectLivekit(
+      errorState,
+      roomConnectionStatusState,
+      localUserId,
+      enabledE2EE,
+      encryptionKey,
+    );
 
-  return currentConnect;
-};
+    return currentConnect;
+  },
+);
 
 export const getMediaServerConn = () => {
   if (typeof currentConnect === 'undefined') {

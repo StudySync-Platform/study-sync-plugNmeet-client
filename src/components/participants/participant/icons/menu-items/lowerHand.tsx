@@ -1,10 +1,7 @@
 import React from 'react';
 import { MenuItem } from '@headlessui/react';
 import { useTranslation } from 'react-i18next';
-import {
-  NatsMsgClientToServerEvents,
-  NatsMsgClientToServerSchema,
-} from 'plugnmeet-protocol-js';
+import { NatsMsgClientToServerEvents, NatsMsgClientToServerSchema } from 'plugnmeet-protocol-js';
 import { create } from '@bufbuild/protobuf';
 
 import { useAppSelector } from '../../../../../store';
@@ -16,9 +13,8 @@ interface ILowerHandMenuItemProps {
 }
 
 const LowerHandMenuItem = ({ userId }: ILowerHandMenuItemProps) => {
-  const raisedHand = useAppSelector(
-    (state) =>
-      participantsSelector.selectById(state, userId)?.metadata.raisedHand,
+  const isRaisedHand = useAppSelector(
+    (state) => participantsSelector.selectById(state, userId)?.metadata.raisedHand?.isRaised,
   );
   const { t } = useTranslation();
   const conn = getNatsConn();
@@ -32,12 +28,12 @@ const LowerHandMenuItem = ({ userId }: ILowerHandMenuItemProps) => {
   };
 
   return (
-    raisedHand && (
+    isRaisedHand && (
       <div className="" role="none">
         <MenuItem>
           {() => (
             <button
-              className="min-h-8 cursor-pointer py-0.5 w-full text-sm text-left leading-none font-medium text-Gray-950 px-3 rounded-lg transition-all duration-300 hover:bg-Gray-50"
+              className="min-h-8 cursor-pointer py-0.5 w-full text-sm text-start leading-none font-medium text-Gray-950 dark:text-white px-3 rounded-lg transition-all duration-300 hover:bg-Gray-50 dark:hover:bg-dark-secondary2 data-[focus]:bg-Gray-50 dark:data-[focus]:bg-dark-secondary2 focus:outline-hidden"
               onClick={lowerHand}
             >
               {t('footer.icons.lower-hand')}

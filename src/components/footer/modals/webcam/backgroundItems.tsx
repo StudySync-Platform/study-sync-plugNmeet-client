@@ -1,12 +1,17 @@
 import React, { ChangeEvent, useEffect, useRef, useState } from 'react';
-import { RoomUploadedFileType } from 'plugnmeet-protocol-js';
-
 import {
-  BackgroundConfig,
-  backgroundImageUrls,
-} from '../../../virtual-background/helpers/backgroundHelper';
+  GetRoomUploadedFilesReqSchema,
+  GetRoomUploadedFilesResSchema,
+  RoomUploadedFileType,
+} from 'plugnmeet-protocol-js';
+import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
+
 import useResumableFilesUpload from '../../../../helpers/hooks/useResumableFilesUpload';
-import { useAppSelector } from '../../../../store';
+import { store, useAppSelector } from '../../../../store';
+import { getConfigValue } from '../../../../helpers/utils';
+import sendAPIRequest from '../../../../helpers/api/plugNmeetAPI';
+import { backgroundImageUrls, loadBackgroundImageUrls } from './backgroundHelper';
+import { BackgroundConfig } from '../../../../helpers/libs/TrackProcessor';
 
 interface IBackgroundItemsProps {
   onSelect: (bg: BackgroundConfig) => void;
@@ -14,9 +19,7 @@ interface IBackgroundItemsProps {
 
 const BackgroundItems = ({ onSelect }: IBackgroundItemsProps) => {
   const allowedFileTypes = ['jpg', 'jpeg', 'png'];
-  const selectedBg = useAppSelector(
-    (state) => state.bottomIconsActivity.virtualBackground,
-  );
+  const selectedBg = useAppSelector((state) => state.roomSettings.virtualBackground);
 
   const [bgImgs, setBgImgs] = useState<Array<string>>(backgroundImageUrls);
   const [files, setFiles] = useState<Array<File>>();
@@ -30,9 +33,59 @@ const BackgroundItems = ({ onSelect }: IBackgroundItemsProps) => {
   });
 
   useEffect(() => {
+    let cancelled = false;
+    loadBackgroundImageUrls().then((urls) => {
+      if (!cancelled) {
+        setBgImgs(urls);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // fetch previously-stored virtual backgrounds
+  useEffect(() => {
+    let cancelled = false;
+    const fetchStored = async () => {
+      try {
+        const body = create(GetRoomUploadedFilesReqSchema, {
+          roomId: store.getState().session.currentRoom.roomId,
+          fileType: RoomUploadedFileType.VIRTUAL_BACKGROUND,
+        });
+        const r = await sendAPIRequest(
+          'getRoomFilesByType',
+          toBinary(GetRoomUploadedFilesReqSchema, body),
+          false,
+          'application/protobuf',
+          'arraybuffer',
+        );
+        if (cancelled) return;
+
+        const res = fromBinary(GetRoomUploadedFilesResSchema, new Uint8Array(r));
+        if (!res.status || !res.files) return;
+
+        const serverUrl = getConfigValue<string>(
+          'serverUrl',
+          'http://localhost:8080',
+          'PLUG_N_MEET_SERVER_URL',
+        );
+        const storedUrls = res.files.map((f) => serverUrl + '/download/uploadedFile/' + f.filePath);
+        setBgImgs((prev) => Array.from(new Set([...prev, ...storedUrls])));
+      } catch (e) {
+        console.warn('Failed to fetch stored virtual backgrounds', e);
+      }
+    };
+    void fetchStored();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (result && result.filePath) {
       const path =
-        (window as any).PLUG_N_MEET_SERVER_URL +
+        getConfigValue<string>('serverUrl', 'http://localhost:8080', 'PLUG_N_MEET_SERVER_URL') +
         '/download/uploadedFile/' +
         result.filePath;
 
@@ -68,48 +121,52 @@ const BackgroundItems = ({ onSelect }: IBackgroundItemsProps) => {
   };
 
   return (
-    <div className="grid grid-cols-6 gap-1 h-[175px] overflow-auto scrollBar mb-0 3xl:mb-5">
-      <div
-        className={`wrap overflow-hidden rounded-2xl h-20 ${selectedBg.type === 'none' ? 'border-4 border-[rgba(124,206,247,0.25)]' : 'border-4 border-transparent'}`}
+    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1 md:h-[175px] overflow-auto scrollBar">
+      <button
+        type="button"
+        className={`wrap overflow-hidden rounded-2xl h-20 focus-ring ${selectedBg.type === 'none' ? 'border-4 border-[rgba(124,206,247,0.25)]' : 'border-4 border-transparent'}`}
         onClick={() => handleOnClick('none', '')}
+        aria-label="No background"
       >
         <div
-          className={`cursor-pointer w-full h-full flex items-center justify-center bg-Gray-50 overflow-hidden ${selectedBg.type === 'none' ? 'border border-Blue shadow-virtual-item rounded-xl' : 'rounded-2xl'}`}
+          className={`cursor-pointer w-full h-full flex items-center justify-center bg-Gray-50 dark:bg-transparent overflow-hidden ${selectedBg.type === 'none' ? 'border border-Blue dark:border-none shadow-virtual-item dark:shadow-none rounded-xl' : 'rounded-2xl dark:border dark:border-Gray-700'}`}
         >
-          <i className="pnm-ban-solid dark:text-dark-secondary2" />
+          <i className="pnm-ban-solid dark:text-white" />
         </div>
-      </div>
-      <div
-        className={`wrap overflow-hidden rounded-2xl h-20 ${selectedBg.type === 'blur-sm' ? 'border-4 border-[rgba(124,206,247,0.25)]' : 'border-4 border-transparent'}`}
-        onClick={() => handleOnClick('blur-sm', '')}
+      </button>
+      <button
+        type="button"
+        className={`wrap overflow-hidden rounded-2xl h-20 focus-ring ${selectedBg.type === 'blur' ? 'border-4 border-[rgba(124,206,247,0.25)]' : 'border-4 border-transparent'}`}
+        onClick={() => handleOnClick('blur', '')}
+        aria-label="Blur background"
       >
         <div
-          className={`cursor-pointer w-full h-full flex items-center justify-center bg-Gray-50 overflow-hidden ${selectedBg.type === 'blur-sm' ? 'border border-Blue shadow-virtual-item rounded-xl' : 'rounded-2xl'}`}
+          className={`cursor-pointer w-full h-full flex items-center justify-center bg-Gray-50 dark:bg-transparent overflow-hidden ${selectedBg.type === 'blur' ? 'border border-Blue dark:border-none shadow-virtual-item dark:shadow-none rounded-xl' : 'rounded-2xl dark:border dark:border-Gray-700'}`}
         >
-          <i className="pnm-blur dark:text-dark-secondary2" />
+          <i className="pnm-blur dark:text-white" />
         </div>
-      </div>
+      </button>
       {bgImgs.map((imageUrl, i) => {
         return (
-          <div
-            className={`wrap overflow-hidden rounded-2xl h-20 transition-all duration-200 ${selectedBg.url === imageUrl ? 'border-4 border-[rgba(124,206,247,0.25)]' : 'border-4 border-transparent'}`}
+          <button
+            type="button"
+            className={`wrap overflow-hidden rounded-2xl h-20 transition-all duration-200 focus-ring ${selectedBg.url === imageUrl ? 'border-4 border-[rgba(124,206,247,0.25)]' : 'border-4 border-transparent'}`}
             onClick={() => handleOnClick('image', imageUrl)}
             key={imageUrl}
           >
             <div
               className={`cursor-pointer w-full h-full flex items-center justify-center bg-Gray-50 overflow-hidden ${selectedBg.url === imageUrl ? 'border border-Blue shadow-virtual-item rounded-xl' : 'rounded-2xl'}`}
             >
-              <img
-                src={imageUrl}
-                alt={`bg-${i + 1}`}
-                className={`object-cover w-full h-full`}
-              />
+              <img src={imageUrl} alt={`bg-${i + 1}`} className={`object-cover w-full h-full`} />
             </div>
-          </div>
+          </button>
         );
       })}
       <div className="upload-btn-wrap relative border-4 border-transparent">
-        <button className="cursor-pointer h-18 w-full border border-dashed border-Blue rounded-2xl flex items-center justify-center bg-Gray-50 overflow-hidden">
+        <button
+          className="cursor-pointer h-18 w-full border border-dashed border-Blue rounded-2xl flex items-center justify-center bg-Gray-50 dark:bg-transparent overflow-hidden"
+          aria-label="Upload background"
+        >
           <svg
             width="16"
             height="16"
@@ -127,7 +184,7 @@ const BackgroundItems = ({ onSelect }: IBackgroundItemsProps) => {
           </svg>
         </button>
         <input
-          className="absolute left-0 top-0 opacity-0 w-full h-full cursor-pointer"
+          className="absolute start-0 top-0 opacity-0 w-full h-full cursor-pointer"
           ref={customFileRef}
           type="file"
           onChange={customBgImage}

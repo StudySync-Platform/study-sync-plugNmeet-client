@@ -1,10 +1,6 @@
 import { useMemo } from 'react';
 
 interface IUseMainAreaCustomCSS {
-  isActiveChatPanel: boolean;
-  isActiveParticipantsPanel: boolean;
-  isActivePollsPanel: boolean;
-  isActiveScreenSharingView: boolean;
   hasScreenShareSubscribers: boolean;
   isActiveWhiteboard: boolean;
   isActiveExternalMediaPlayer: boolean | undefined;
@@ -13,10 +9,6 @@ interface IUseMainAreaCustomCSS {
 }
 
 export const useMainAreaCustomCSS = ({
-  isActiveChatPanel,
-  isActiveParticipantsPanel,
-  isActivePollsPanel,
-  isActiveScreenSharingView,
   hasScreenShareSubscribers,
   isActiveWhiteboard,
   isActiveExternalMediaPlayer,
@@ -26,23 +18,11 @@ export const useMainAreaCustomCSS = ({
   return useMemo(() => {
     const css: Array<string> = [];
 
-    isActiveChatPanel ? css.push('showChatPanel') : css.push('hideChatPanel');
-
-    isActiveParticipantsPanel
-      ? css.push('showParticipantsPanel')
-      : css.push('hideParticipantsPanel');
-
-    isActivePollsPanel
-      ? css.push('showPollsPanel')
-      : css.push('hidePollsPanel');
-
-    isActiveScreenSharingView && hasScreenShareSubscribers
+    hasScreenShareSubscribers
       ? css.push('showScreenShare fullWidthMainArea')
       : css.push('hideScreenShare');
 
-    isActiveWhiteboard
-      ? css.push('showWhiteboard fullWidthMainArea')
-      : css.push('hideWhiteboard');
+    isActiveWhiteboard ? css.push('showWhiteboard fullWidthMainArea') : css.push('hideWhiteboard');
 
     isActiveExternalMediaPlayer
       ? css.push('showExternalMediaPlayer fullWidthMainArea')
@@ -58,11 +38,7 @@ export const useMainAreaCustomCSS = ({
 
     return css.join(' ');
   }, [
-    isActiveScreenSharingView,
     hasScreenShareSubscribers,
-    isActiveChatPanel,
-    isActiveParticipantsPanel,
-    isActivePollsPanel,
     isActiveWhiteboard,
     isActiveExternalMediaPlayer,
     isActiveDisplayExternalLink,

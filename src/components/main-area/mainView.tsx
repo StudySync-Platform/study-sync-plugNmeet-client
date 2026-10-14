@@ -1,216 +1,86 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { debounce } from 'es-toolkit';
-import { store, useAppDispatch } from '../../store';
-import {
-  updateIsActiveChatPanel,
-  updateIsActiveParticipantsPanel,
-  updateIsEnabledExtendedVerticalCamView,
-} from '../../store/slices/bottomIconsActivitySlice';
+import React from 'react';
 
-import { useMainAreaState } from './hooks/useMainAreaState';
-import { useMainAreaCustomCSS } from './hooks/useMainAreaCustomCSS';
-import { doRefreshWhiteboard } from '../../store/slices/whiteboard';
+import { useSharedNotepad } from './hooks/useSharedNotepad';
+import { useWhiteboard } from './hooks/useWhiteboard';
+import { useExternalMediaPlayer } from './hooks/useExternalMediaPlayer';
+import { useDisplayExternalLink } from './hooks/useDisplayExternalLink';
+import { useVideosComponent } from './hooks/useVideosComponent';
+import { useScreenShareElements } from './hooks/useScreenShareElements';
+import { useTranslationTranscription } from './hooks/useTranslationTranscription';
+import { useVideoLayout } from './hooks/useVideoLayout';
 
-import ActiveSpeakers from '../active-speakers';
-import MainView from './mainView';
-import PollsComponent from '../polls';
-import ChatComponent from '../chat';
-import ParticipantsComponent from '../participants';
+import AudioElements from '../media-elements/audios';
+import LayoutWrapper from './layoutWrapper';
+import { useInsightsAiTextChat } from './hooks/useInsightsAiTextChat';
+import { useNotepadController } from '../shared-notepad/useNotepadController';
 
-const MainArea = () => {
-  const dispatch = useAppDispatch();
-  const [isMuted, setIsMuted] = useState(false); // ✅ added local mute state
+interface IMainViewProps {
+  isRecorder: boolean;
+  isActiveWhiteboard: boolean;
+  isActiveExternalMediaPlayer: boolean;
+  isActiveDisplayExternalLink: boolean;
+  hasScreenShareSubscribers: boolean;
+  hasVideoSubscribers: boolean;
+}
 
-  const { isRecorder, roomFeatures } = useMemo(() => {
-    const session = store.getState().session;
-    return {
-      isRecorder: !!session.currentUser?.isRecorder,
-      roomFeatures: session.currentRoom.metadata?.roomFeatures,
-    };
-  }, []);
-
-  const {
-    isActiveParticipantsPanel,
-    isActiveScreenSharingView,
+const MainView = ({
+  isRecorder,
+  isActiveWhiteboard,
+  isActiveExternalMediaPlayer,
+  isActiveDisplayExternalLink,
+  hasScreenShareSubscribers,
+  hasVideoSubscribers,
+}: IMainViewProps) => {
+  const { showVerticalVideoView, showVideoElms, pinCamUserId } = useVideoLayout({
     hasScreenShareSubscribers,
-    isActiveWebcamsView,
+    isActiveWhiteboard,
+    isActiveExternalMediaPlayer,
+    isActiveDisplayExternalLink,
     hasVideoSubscribers,
-    isActiveWhiteboard,
-    isActiveExternalMediaPlayer,
-    isActiveDisplayExternalLink,
-    isActiveChatPanel,
-    isActivePollsPanel,
-    screenHeight,
-  } = useMainAreaState();
-
-  useEffect(() => {
-    if (!roomFeatures?.chatFeatures?.allowChat) {
-      dispatch(updateIsActiveChatPanel(false));
-    }
-
-    if (!isRecorder) {
-      dispatch(updateIsActiveParticipantsPanel(true));
-    }
-
-    if (isRecorder) {
-      dispatch(updateIsEnabledExtendedVerticalCamView(true));
-    }
-
-    if (
-      !isRecorder &&
-      'Notification' in window &&
-      Notification.permission !== 'denied'
-    ) {
-      Notification.requestPermission().then();
-    }
-  }, [dispatch, isRecorder, roomFeatures]);
-
-  const customCSS = useMainAreaCustomCSS({
-    isActiveChatPanel,
-    isActiveParticipantsPanel,
-    isActivePollsPanel,
-    isActiveScreenSharingView,
-    hasScreenShareSubscribers,
-    isActiveWhiteboard,
-    isActiveExternalMediaPlayer,
-    isActiveDisplayExternalLink,
-    isRecorder,
   });
 
-  const renderMainComponentElms = useMemo(() => {
-    return (
-      <MainView
-        isRecorder={isRecorder}
-        isActiveWhiteboard={isActiveWhiteboard}
-        isActiveExternalMediaPlayer={isActiveExternalMediaPlayer ?? false}
-        isActiveDisplayExternalLink={isActiveDisplayExternalLink ?? false}
-        isActiveScreenSharingView={isActiveScreenSharingView}
-        hasScreenShareSubscribers={hasScreenShareSubscribers}
-        isActiveWebcamsView={isActiveWebcamsView}
-        hasVideoSubscribers={hasVideoSubscribers}
-        // ✅ pass mute state down so user tile can show muted icon
-        isMuted={isMuted}
-      />
-    );
-  }, [
-    isRecorder,
-    isActiveScreenSharingView,
-    hasScreenShareSubscribers,
-    isActiveWebcamsView,
-    hasVideoSubscribers,
-    isActiveDisplayExternalLink,
+  const sharedNotepadElm = useSharedNotepad();
+  useNotepadController();
+  const insightsAiTextChatElm = useInsightsAiTextChat();
+  const whiteboardElm = useWhiteboard(isActiveWhiteboard, hasScreenShareSubscribers, showVideoElms);
+  const externalMediaPlayerElm = useExternalMediaPlayer(
     isActiveExternalMediaPlayer,
+    hasScreenShareSubscribers,
     isActiveWhiteboard,
-    isMuted,
-  ]);
-
-  const debouncedRefresh = useMemo(
-    () =>
-      debounce(() => {
-        dispatch(doRefreshWhiteboard());
-      }, 500),
-    [dispatch],
+    isRecorder,
+  );
+  const displayExternalLinkElm = useDisplayExternalLink(
+    isActiveDisplayExternalLink,
+    hasScreenShareSubscribers,
+    isActiveWhiteboard,
+    isActiveExternalMediaPlayer,
+    isRecorder,
   );
 
-  const handleSidePanelToggled = useCallback(() => {
-    if (isActiveWhiteboard) debouncedRefresh();
-  }, [debouncedRefresh, isActiveWhiteboard]);
+  const videosComponentElm = useVideosComponent(hasVideoSubscribers, showVerticalVideoView);
+  const screenShareElementsElm = useScreenShareElements(hasScreenShareSubscribers);
+  const translationTranscriptionElm = useTranslationTranscription();
 
   return (
-    <div
-      id="main-area"
-      className={`relative flex flex-col w-full h-full overflow-hidden bg-Gray-25 ${customCSS}`}
-      style={{ height: `${screenHeight}px` }}
-    >
-      {/* Header */}
-      <header className="flex justify-between items-center px-6 py-3 bg-purple-600 text-white shadow-md">
-        <div className="flex items-center gap-2">
-          <img
-            src="/logo.png"
-            alt="Logo"
-            className="h-8 w-8 rounded-full bg-white"
-          />
-          <h2 className="text-lg font-semibold">Study Session</h2>
-        </div>
-        <div className="flex items-center gap-3 text-sm opacity-90">
-          <span>My Test Room</span>
-          <span>Physics - Momentum</span>
-        </div>
-      </header>
-
-      {/* Main content */}
-      <div className="flex flex-1 overflow-hidden bg-gradient-to-b from-purple-50 to-white">
-        {/* Grid view */}
-        <div className="flex-1 flex flex-col items-center justify-center overflow-auto">
-          <ActiveSpeakers />
-          {renderMainComponentElms}
-        </div>
-
-        {/* Right panel */}
-        <div
-          className={`relative transition-all duration-300 ease-in-out ${
-            isActiveParticipantsPanel || isActiveChatPanel || isActivePollsPanel
-              ? 'w-[320px]'
-              : 'w-0'
-          } border-l border-gray-200 bg-white overflow-hidden`}
-        >
-          {isActiveParticipantsPanel && (
-            <ParticipantsComponent onToggle={handleSidePanelToggled} />
-          )}
-          {isActiveChatPanel && roomFeatures?.chatFeatures?.allowChat && (
-            <ChatComponent />
-          )}
-          {isActivePollsPanel && roomFeatures?.pollsFeatures?.isAllow && (
-            <PollsComponent />
-          )}
-        </div>
-      </div>
-
-      {/* Bottom Control Bar */}
-      <footer className="absolute bottom-6 left-1/2 transform -translate-x-1/2 flex items-center gap-6 bg-white shadow-md px-8 py-4 rounded-full">
-        {/* 🎙️ Mic button */}
-        <button
-          onClick={() => setIsMuted((prev) => !prev)}
-          className={`p-3 rounded-full text-lg transition-all ${
-            isMuted
-              ? 'bg-red-100 text-red-600 hover:bg-red-200'
-              : 'hover:bg-gray-100'
-          }`}
-          title={isMuted ? 'Unmute microphone' : 'Mute microphone'}
-        >
-          {isMuted ? '🔇' : '🎙️'}
-        </button>
-
-        {/* 📷 Camera button */}
-        <button className="p-3 rounded-full hover:bg-gray-100 text-lg">📷</button>
-
-        {/* 🖥️ Screen share */}
-        <button className="p-3 rounded-full hover:bg-gray-100 text-lg">🖥️</button>
-
-        {/* 👥 Participants */}
-        <button
-          className={`p-3 rounded-full hover:bg-gray-100 text-lg ${
-            isActiveParticipantsPanel ? 'bg-purple-100' : ''
-          }`}
-          onClick={() =>
-            dispatch(updateIsActiveParticipantsPanel(!isActiveParticipantsPanel))
-          }
-        >
-          👥
-        </button>
-
-        {/* 💬 Chat */}
-        <button
-          className={`p-3 rounded-full hover:bg-gray-100 text-lg ${
-            isActiveChatPanel ? 'bg-purple-100' : ''
-          }`}
-          onClick={() => dispatch(updateIsActiveChatPanel(!isActiveChatPanel))}
-        >
-          💬
-        </button>
-      </footer>
-    </div>
+    <>
+      <LayoutWrapper
+        isActiveScreenShare={hasScreenShareSubscribers}
+        showVideoElms={showVideoElms}
+        showVerticalVideoView={showVerticalVideoView}
+        pinCamUserId={pinCamUserId}
+      >
+        {videosComponentElm}
+        {screenShareElementsElm}
+        {sharedNotepadElm}
+        {insightsAiTextChatElm}
+        {whiteboardElm}
+        {translationTranscriptionElm}
+        {externalMediaPlayerElm}
+        {displayExternalLinkElm}
+      </LayoutWrapper>
+      <AudioElements />
+    </>
   );
 };
 
-export default MainArea;
+export default React.memo(MainView);

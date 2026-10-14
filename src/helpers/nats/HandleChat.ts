@@ -2,33 +2,34 @@ import { ChatMessage } from 'plugnmeet-protocol-js';
 
 import ConnectNats from './ConnectNats';
 import { store } from '../../store';
-import { decryptMessage } from '../libs/cryptoMessages';
-import { addChatMessage } from '../../store/slices/chatMessagesSlice';
+import { addChatMessage, updateChatMessage } from '../../store/slices/chatMessagesSlice';
 import {
-  updateIsActiveChatPanel,
+  setActiveSidePanel,
   updateTotalUnreadChatMsgs,
 } from '../../store/slices/bottomIconsActivitySlice';
-import {
-  addUserNotification,
-  updateUnreadMsgFrom,
-} from '../../store/slices/roomSettingsSlice';
+import { updateUnreadMsgFrom } from '../../store/slices/roomSettingsSlice';
+import { DB_STORE_NAMES, idbStore } from '../libs/idb';
+import { cleanHtmlForChat } from '../utils';
 
 export default class HandleChat {
-  private _that: ConnectNats;
-  private _isEnabledE2EE: boolean | undefined = undefined;
+  private connectNats: ConnectNats;
   private allowViewOtherUsersList: boolean | undefined = undefined;
 
-  constructor(that: ConnectNats) {
-    this._that = that;
+  constructor(connectNats: ConnectNats) {
+    this.connectNats = connectNats;
   }
 
   public handleMsg = async (payload: ChatMessage) => {
-    if (payload.isPrivate && payload.toUserId !== this._that.userId) {
-      if (payload.fromUserId !== this._that.userId) {
-        // private message not for this user
-        return;
-      }
+    // If this is a private message, we should only process it if we are the sender or the receiver.
+    if (
+      payload.isPrivate &&
+      payload.fromUserId !== this.connectNats.userId &&
+      payload.toUserId !== this.connectNats.userId
+    ) {
+      // This is a private message between two other users, so we can ignore it.
+      return;
     }
+
     if (typeof this.allowViewOtherUsersList === 'undefined') {
       this.allowViewOtherUsersList =
         store.getState().session.currentRoom.metadata?.roomFeatures?.allowViewOtherUsersList;
@@ -37,35 +38,57 @@ export default class HandleChat {
     if (
       !this.allowViewOtherUsersList &&
       !payload.fromAdmin &&
-      !this._that.isAdmin &&
-      payload.fromUserId !== this._that.userId
+      !this.connectNats.isAdmin &&
+      payload.fromUserId !== this.connectNats.userId
     ) {
       // as it'd not allow viewing other users in the list
       // so, any chat message will not be added except from admin
       return;
     }
 
-    const finalMsg = await this.handleDecryption(payload.message);
-    if (!finalMsg) {
+    const isDeleted = !!payload.meta?.isDeleted;
+
+    if (!isDeleted) {
+      // check translation
+      const selectedChatTransLang = store.getState().roomSettings.selectedChatTransLang;
+      if (selectedChatTransLang !== '') {
+        if (payload.sourceLang && payload.sourceLang !== selectedChatTransLang) {
+          // so, we'll need to pickup from translation
+          if (typeof payload.translations[selectedChatTransLang] !== 'undefined') {
+            payload.message = payload.translations[selectedChatTransLang];
+          }
+        }
+      }
+
+      // Sanitize after any translation swap and before store/dispatch
+      payload.message = cleanHtmlForChat(payload.message);
+    } else {
+      payload.message = '';
+    }
+
+    const isUpdate = !!store.getState().chatMessages.messageIds[payload.id];
+    store.dispatch(
+      (isUpdate ? updateChatMessage : addChatMessage)({
+        message: payload,
+        currentUserId: this.connectNats.userId,
+      }),
+    );
+    await idbStore(DB_STORE_NAMES.CHAT_MESSAGES, payload.id, payload);
+    if (isUpdate) {
       return;
     }
-    payload.message = finalMsg;
-    store.dispatch(addChatMessage(payload));
 
-    const isActiveChatPanel =
-      store.getState().bottomIconsActivity.isActiveChatPanel;
+    const isActiveChatPanel = store.getState().bottomIconsActivity.activeSidePanel === 'CHAT';
     const selectedChatOption = store.getState().roomSettings.selectedChatOption;
     const currentUser = store.getState().session.currentUser;
     const isRecorder =
-      (currentUser?.userId === 'RECORDER_BOT' ||
-        currentUser?.userId === 'RTMP_BOT') ??
-      false;
+      (currentUser?.userId === 'RECORDER_BOT' || currentUser?.userId === 'RTMP_BOT') ?? false;
 
     if (!isActiveChatPanel) {
       if (!isRecorder) {
         store.dispatch(updateTotalUnreadChatMsgs());
       } else {
-        store.dispatch(updateIsActiveChatPanel(true));
+        store.dispatch(setActiveSidePanel('CHAT'));
       }
     }
 
@@ -89,32 +112,4 @@ export default class HandleChat {
       );
     }
   };
-
-  private async handleDecryption(msg: string) {
-    if (typeof this._isEnabledE2EE === 'undefined') {
-      const e2ee =
-        store.getState().session.currentRoom.metadata?.roomFeatures
-          ?.endToEndEncryptionFeatures;
-      this._isEnabledE2EE = !!(
-        e2ee &&
-        e2ee.isEnabled &&
-        e2ee.includedChatMessages
-      );
-    }
-    if (this._isEnabledE2EE) {
-      try {
-        return await decryptMessage(msg);
-      } catch (e: any) {
-        store.dispatch(
-          addUserNotification({
-            message: 'Decryption error: ' + e.message,
-            typeOption: 'error',
-          }),
-        );
-        console.error('Decryption error:' + e.message);
-        return undefined;
-      }
-    }
-    return msg;
-  }
 }

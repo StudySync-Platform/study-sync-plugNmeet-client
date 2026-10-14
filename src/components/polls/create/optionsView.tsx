@@ -1,10 +1,4 @@
-import React, {
-  ChangeEvent,
-  Dispatch,
-  SetStateAction,
-  useCallback,
-  useMemo,
-} from 'react';
+import React, { ChangeEvent, Dispatch, SetStateAction, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { TrashIconSVG } from '../../../assets/Icons/TrashIconSVG';
@@ -14,9 +8,10 @@ import { CreatePollOptions } from './index';
 interface OptionsProps {
   options: CreatePollOptions[];
   setOptions: Dispatch<SetStateAction<CreatePollOptions[]>>;
+  isQuiz?: boolean;
 }
 
-const OptionsView = ({ options, setOptions }: OptionsProps) => {
+const OptionsView = ({ options, setOptions, isQuiz }: OptionsProps) => {
   const { t } = useTranslation();
 
   // update option text
@@ -24,6 +19,17 @@ const OptionsView = ({ options, setOptions }: OptionsProps) => {
     (index: number, e: ChangeEvent<HTMLInputElement>) => {
       const newOptions = options.map((option, i) =>
         i === index ? { ...option, text: e.target.value } : option,
+      );
+      setOptions(newOptions);
+    },
+    [options, setOptions],
+  );
+
+  // update option correct flag (quiz mode)
+  const onCorrectChange = useCallback(
+    (index: number, checked: boolean) => {
+      const newOptions = options.map((option, i) =>
+        i === index ? { ...option, isCorrect: checked } : option,
       );
       setOptions(newOptions);
     },
@@ -45,6 +51,7 @@ const OptionsView = ({ options, setOptions }: OptionsProps) => {
       {
         id: (prev[prev.length - 1]?.id ?? 0) + 1,
         text: '',
+        isCorrect: false,
       },
     ]);
   }, [setOptions]);
@@ -53,7 +60,7 @@ const OptionsView = ({ options, setOptions }: OptionsProps) => {
 
   return (
     <div className="option-field-wrapper pt-5 pb-6">
-      <p className="text-sm text-Gray-800 font-medium mb-2 inline-block">
+      <p className="text-sm text-Gray-800 dark:text-white font-medium mb-2 inline-block">
         {t('polls.options')}
       </p>
       <div className="overflow-auto h-full max-h-[345px] scrollBar scrollBar2 mb-5">
@@ -61,7 +68,22 @@ const OptionsView = ({ options, setOptions }: OptionsProps) => {
           {options.map((elm, index) => (
             <div className="form-inline" key={elm.id}>
               <div className="input-wrapper w-full flex items-center gap-2">
+                {isQuiz && (
+                  <label
+                    title={t('polls.correct-answer')}
+                    className="shrink-0 flex items-center cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      aria-label={t('polls.correct-answer')}
+                      checked={elm.isCorrect}
+                      onChange={(e) => onCorrectChange(index, e.currentTarget.checked)}
+                      className="border cursor-pointer border-Gray-300 bg-white shadow-input w-4 h-4 outline-hidden focus:border-[rgba(0,161,242,1)] focus:shadow-input-focus dark:bg-dark-secondary dark:border-dark-text"
+                    />
+                  </label>
+                )}
                 <input
+                  dir="auto"
                   type="text"
                   required={true}
                   name={`opt_${elm.id}`}
@@ -76,7 +98,7 @@ const OptionsView = ({ options, setOptions }: OptionsProps) => {
                 {canRemove && (
                   <button
                     type="button"
-                    className="h-11 w-11 border border-Red-200 bg-Red-50 text-Red-600 shadow-button-shadow rounded-[15px] flex items-center justify-center cursor-pointer"
+                    className="h-10 md:h-11 w-10 md:w-11 border border-Red-200 bg-Red-50 dark:bg-dark-secondary text-Red-600 shadow-button-shadow dark:shadow-none rounded-[12px] md:rounded-[15px] flex items-center justify-center cursor-pointer"
                     onClick={() => removeOption(elm.id)}
                   >
                     <TrashIconSVG />
@@ -88,7 +110,7 @@ const OptionsView = ({ options, setOptions }: OptionsProps) => {
         </div>
       </div>
       <button
-        className="w-full cursor-pointer h-10 3xl:h-11 text-sm 3xl:text-base font-semibold bg-Gray-50 hover:bg-Gray-100 rounded-[15px] flex justify-center items-center gap-2 transition-all duration-300 shadow-button-shadow"
+        className="w-full cursor-pointer h-10 3xl:h-11 text-sm 3xl:text-base font-semibold bg-Gray-50 hover:bg-Gray-100 rounded-[12px] md:rounded-[15px] flex justify-center items-center gap-2 transition-all duration-300 shadow-button-shadow"
         type="button"
         onClick={addOption}
       >

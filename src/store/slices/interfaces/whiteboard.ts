@@ -3,16 +3,15 @@ import type { NormalizedZoomValue } from '@excalidraw/excalidraw/types';
 export interface IWhiteboardSlice {
   totalPages: number;
   currentPage: number;
-  excalidrawElements: string;
-  mousePointerLocation: string;
   whiteboardAppState: IWhiteboardAppState | null;
-  requestedWhiteboardData: IRequestWhiteboardData;
   currentWhiteboardOfficeFileId: string;
   currentOfficeFilePages: string;
   whiteboardUploadedOfficeFiles: Array<IWhiteboardOfficeFile>;
-  refreshWhiteboard: number;
-  allExcalidrawElements: string;
+  refreshWhiteboardSignal: number;
+  refreshWhiteboardFilesListSignal: number;
 }
+
+export type WhiteboardPageOrientation = 'portrait' | 'landscape';
 
 export interface IWhiteboardFile {
   id: string;
@@ -22,11 +21,16 @@ export interface IWhiteboardFile {
   uploaderWhiteboardHeight: number;
   uploaderWhiteboardWidth: number;
   isOfficeFile: boolean;
+  /** Server-side sidecar: page_N_meta.json (same dir as page_N.png). Always present for office pages. */
+  metaFilePath: string;
 }
 
-export interface IRequestWhiteboardData {
-  requested: boolean;
-  sendTo: string;
+/** Shape of page_N_meta.json written during whiteboard conversion. */
+export interface WhiteboardOfficePageMeta {
+  page: number;
+  orientation: WhiteboardPageOrientation;
+  width: number;
+  height: number;
 }
 
 export interface IWhiteboardOfficeFile {
@@ -37,6 +41,9 @@ export interface IWhiteboardOfficeFile {
   currentPage?: number;
   pageFiles: string;
 }
+
+/** Sentinel file id used when no office whiteboard file is active (blank board). */
+export const DEFAULT_WHITEBOARD_OFFICE_FILE_ID = 'default';
 
 export interface IWhiteboardAppState {
   height: number;
@@ -64,4 +71,11 @@ export interface WhiteboardFileConversionRes {
   fileId: string;
   filePath: string;
   totalPages: number;
+}
+
+export interface WhiteboardDataAsDonorData {
+  appState: IWhiteboardAppState;
+  currentOfficeFilePages: string;
+  currentWhiteboardOfficeFileId: string;
+  currentPageNumber: number;
 }

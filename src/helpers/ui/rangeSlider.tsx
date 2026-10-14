@@ -1,10 +1,5 @@
-import React, {
-  useState,
-  useRef,
-  useEffect,
-  useCallback,
-  useMemo,
-} from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { throttle } from 'es-toolkit';
 
 interface RangeSliderProps {
@@ -17,6 +12,7 @@ interface RangeSliderProps {
   filledColor?: string;
   emptyColor?: string;
   thumbColor?: string;
+  label?: string;
 }
 
 const RangeSlider = ({
@@ -29,7 +25,9 @@ const RangeSlider = ({
   filledColor = 'linear-gradient(90deg, #F0F8FC 0%, #BAE3F7 25%, #32B7FA 50%, #00A1F2 75%, #0088CC 100%)',
   emptyColor = 'rgba(225, 237, 250, 1)',
   thumbColor = '#fff',
+  label,
 }: RangeSliderProps) => {
+  const { i18n } = useTranslation();
   const [internalValue, setInternalValue] = useState<number>(propValue);
   const [isDragging, setIsDragging] = useState(false);
   const sliderRef = useRef<HTMLDivElement>(null);
@@ -43,7 +41,10 @@ const RangeSlider = ({
       if (!sliderRef.current) return;
 
       const rect = sliderRef.current.getBoundingClientRect();
-      let position = (clientX - rect.left) / rect.width;
+      const isRtl = i18n.dir() === 'rtl';
+      let position = isRtl
+        ? (rect.right - clientX) / rect.width
+        : (clientX - rect.left) / rect.width;
       position = Math.max(0, Math.min(1, position)); // Clamp between 0-1
 
       const newValue = Math.round(min + position * (max - min));
@@ -54,7 +55,7 @@ const RangeSlider = ({
         setInternalValue(newValue);
       }
     },
-    [min, max, onChange, setInternalValue],
+    [min, max, onChange, setInternalValue, i18n],
   );
 
   const throttledUpdate = useMemo(
@@ -102,6 +103,49 @@ const RangeSlider = ({
     updateValueFromPosition(e.touches[0].clientX);
   };
 
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const step = Math.max(1, Math.round((max - min) / 100));
+      let newValue = value;
+      switch (e.key) {
+        case 'ArrowRight':
+        case 'ArrowUp':
+          e.preventDefault();
+          newValue = Math.min(
+            max,
+            value + (i18n.dir() === 'rtl' && e.key === 'ArrowRight' ? -step : step),
+          );
+          break;
+        case 'ArrowLeft':
+        case 'ArrowDown':
+          e.preventDefault();
+          newValue = Math.max(
+            min,
+            value - (i18n.dir() === 'rtl' && e.key === 'ArrowLeft' ? -step : step),
+          );
+          break;
+        case 'Home':
+          e.preventDefault();
+          newValue = min;
+          break;
+        case 'End':
+          e.preventDefault();
+          newValue = max;
+          break;
+        default:
+          return;
+      }
+      if (newValue !== value) {
+        if (onChange) {
+          onChange(newValue);
+        } else {
+          setInternalValue(newValue);
+        }
+      }
+    },
+    [min, max, value, onChange, i18n],
+  );
+
   const fillPercentage = ((value - min) / (max - min)) * 100;
 
   return (
@@ -124,19 +168,26 @@ const RangeSlider = ({
         />
         <div
           ref={thumbRef}
-          className="custom-range-thumb"
+          className="custom-range-thumb focus-ring"
+          role="slider"
+          tabIndex={0}
+          aria-valuemin={min}
+          aria-valuemax={max}
+          aria-valuenow={value}
+          aria-label={label ?? 'Slider'}
           style={{
-            left: `${fillPercentage}%`,
+            insetInlineStart: `${fillPercentage}%`,
             width: `${thumbSize}px`,
             height: `${thumbSize}px`,
             backgroundColor: thumbColor,
-            marginLeft: `-${thumbSize / 2}px`,
+            marginInlineStart: `-${thumbSize / 2}px`,
             marginTop: `-${thumbSize / 2}px`,
             borderWidth: 2,
             borderColor: '#0088CC',
           }}
           onMouseDown={handleMouseDown}
           onTouchStart={handleTouchStart}
+          onKeyDown={handleKeyDown}
         />
       </div>
     </div>

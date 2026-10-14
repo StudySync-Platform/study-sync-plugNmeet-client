@@ -1,4 +1,5 @@
-import { type RoomMetadata, UserMetadata } from 'plugnmeet-protocol-js';
+import { ClientType, type RoomMetadata, UserMetadata } from 'plugnmeet-protocol-js';
+import { PnmConnectionQuality } from '../../../helpers/livekit/ConnectionQualityMonitor';
 
 export enum UserDeviceType {
   MOBILE = 'mobile',
@@ -20,6 +21,8 @@ export interface ISession {
   totalAudioSubscribers: number;
   userDeviceType: UserDeviceType;
   isCloud: boolean;
+  clientType?: ClientType; // session client type from VerifyTokenRes; default WEB
+  overallConnectionQuality?: PnmConnectionQuality;
 }
 
 export interface ICurrentUser {

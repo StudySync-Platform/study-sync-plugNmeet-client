@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Menu, MenuButton, Transition } from '@headlessui/react';
+import { Menu, MenuButton } from '@headlessui/react';
 import { useTranslation } from 'react-i18next';
 
 import { store, useAppSelector } from '../../store';
@@ -13,12 +13,14 @@ import HeaderLogo from './headerLogo';
 import { getNatsConn } from '../../helpers/nats';
 import { HeaderMenuIcon } from '../../assets/Icons/HeaderMenuIcon';
 import UserNotifications from './user-notifications';
+import ConnectionStatus from './connectionStatus';
+import MediaDegradationBanner from './mediaDegradationBanner';
 import ConfirmationModal from '../../helpers/ui/confirmationModal';
+import BackToMainBtn from '../breakout-room/backToMainBtn';
+import { APP_LAYOUT_CLASSES } from '../../helpers/dimensions';
 
 const Header = () => {
-  const roomTitle = useAppSelector(
-    (state) => state.session.currentRoom.metadata?.roomTitle,
-  );
+  const roomTitle = useAppSelector((state) => state.session.currentRoom.metadata?.roomTitle);
   const isRecorder = store.getState().session.currentUser?.isRecorder;
 
   const { t } = useTranslation();
@@ -48,50 +50,47 @@ const Header = () => {
       <>
         <header
           id="main-header"
-          className={`relative z-99999 px-4 min-h-[54px] 3xl:min-h-[68px] py-1 sm:py-0 flex flex-wrap sm:flex-nowrap items-center justify-between bg-white dark:bg-dark-primary transition-transform border-b border-Gray-200 dark:border-Gray-800 ac`}
+          aria-label={t('header.aria-label').toString()}
+          className={`relative z-99999 px-4 ${APP_LAYOUT_CLASSES.headerHeight} py-1 md:py-0 flex flex-nowrap items-center justify-between bg-white dark:bg-dark-primary transition-transform border-b border-Gray-200 dark:border-Gray-800`}
         >
-          <div className="left relative z-20 flex items-center gap-3 sm:gap-5 w-1/2 sm:w-3/3 order-1">
+          <div className="left relative z-20 flex items-center gap-2 md:gap-2.5 lg:gap-5 shrink-0 justify-start">
             <HeaderLogo />
             <DarkThemeSwitcher />
           </div>
-          <div className="middle w-full sm:w-3/3 relative z-20 order-3 sm:order-2">
-            <h2 className="header-title text-sm 3xl:text-base font-medium text-Gray-950 dark:text-white leading-tight text-center">
+          <div className="middle flex-1 min-w-0 flex items-center justify-center z-10 order-2 py-0.5 mx-2 gap-2">
+            <h2 className="header-title text-xs sm:text-sm 3xl:text-base font-medium text-Gray-950 dark:text-white leading-tight text-center cursor-text truncate min-w-0">
               {title}
             </h2>
           </div>
-          <div className="right flex items-center justify-end relative z-20 -right-3 w-1/2 sm:w-3/3 order-2 sm:order-3 gap-0.5">
+          <div className="right flex items-center justify-end relative -end-3 shrink-0 gap-0.5 z-30 order-3">
+            <BackToMainBtn />
             <DurationView />
             <UserNotifications />
-            <VolumeControl />
+            <div className="hidden md:block">
+              <ConnectionStatus />
+            </div>
+            <div className="hidden md:block">
+              <VolumeControl />
+            </div>
             <Menu>
               {({ open }) => (
                 <div>
                   <MenuButton
-                    className={`relative shrink-0 w-8 h-8 flex items-center justify-center rounded-[10px] cursor-pointer ${open ? 'bg-Gray-50' : ''}`}
+                    className={`relative shrink-0 w-7 md:w-8 h-7 md:h-8 flex items-center justify-center rounded-[10px] cursor-pointer focus-ring ${open ? 'bg-Gray-50 dark:bg-Gray-800' : ''}`}
+                    aria-label={t('header.menus.menu').toString()}
                   >
                     <div className="text-gray-700 dark:text-white cursor-pointer">
                       <HeaderMenuIcon />
                     </div>
                   </MenuButton>
 
-                  {/* Use the Transition component. */}
-                  <Transition
-                    as={'div'}
-                    show={open}
-                    enter="transition duration-100 ease-out"
-                    enterFrom="transform scale-95 opacity-0"
-                    enterTo="transform scale-100 opacity-100"
-                    leave="transition duration-75 ease-out"
-                    leaveFrom="transform scale-100 opacity-100"
-                    leaveTo="transform scale-95 opacity-0"
-                  >
-                    <HeaderMenus onOpenAlert={() => handleLogout()} />
-                  </Transition>
+                  <HeaderMenus onOpenAlert={() => handleLogout()} />
                 </div>
               )}
             </Menu>
           </div>
         </header>
+        <MediaDegradationBanner />
         <ConfirmationModal
           show={showModal}
           onClose={() => setShowModal(false)}

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 
 import Avatar from './avatar';
 import ParticipantName from './name';
@@ -10,11 +10,14 @@ import MenuIcon from './icons/menu';
 import VisibilityIcon from './icons/visibility';
 import PresenterIcon from './icons/presenterIcon';
 import WaitingApproval from './waitingApproval';
-import { IParticipant } from '../../../store/slices/interfaces/participant';
+import ConnectionQualityIcon from './icons/connectionQuality';
+
 import { ICurrentUser } from '../../../store/slices/interfaces/session';
+import { IVisibleParticipantInfo } from '../../../store/slices/interfaces/participant';
+import { store } from '../../../store';
 
 interface IParticipantComponentProps {
-  participant: IParticipant;
+  participant: IVisibleParticipantInfo;
   currentUser: ICurrentUser | undefined;
   isRemoteParticipant: boolean;
   openRemoveParticipantAlert(name: string, userId: string, type: string): void;
@@ -31,6 +34,7 @@ const ParticipantComponent = ({
       openRemoveParticipantAlert(participant.name, user_id, type);
     }
   };
+  const currentUserIsAdmin = !!store.getState().session.currentUser?.metadata?.isAdmin;
 
   return (
     <div className="flex items-center justify-between relative w-full gap-2">
@@ -41,22 +45,21 @@ const ParticipantComponent = ({
           isCurrentUser={currentUser?.userId === participant.userId}
         />
       </div>
-      <div className="right flex-auto flex items-center justify-end ml-2">
+      <div className="right flex-auto flex items-center justify-end ms-2">
         <div className="icon-group flex items-center justify-center gap-1">
+          <ConnectionQualityIcon userId={participant.userId} />
           <RaiseHandIcon userId={participant.userId} />
           <VisibilityIcon userId={participant.userId} />
           <PresenterIcon userId={participant.userId} />
           <WebcamIcon userId={participant.userId} />
           <ScreenShareIcon userId={participant.userId} />
-          <MicIcon
-            userId={participant.userId}
-            isRemoteParticipant={isRemoteParticipant}
-          />
+          <MicIcon userId={participant.userId} isRemoteParticipant={isRemoteParticipant} />
           {currentUser?.userId !== participant.userId && (
             <MenuIcon
               userId={participant.userId}
               name={participant.name}
-              isAdmin={participant.metadata.isAdmin}
+              isAdmin={participant.isAdmin}
+              currentUserIsAdmin={currentUserIsAdmin}
               openRemoveParticipantAlert={onOpenRemoveParticipantAlert}
             />
           )}
@@ -73,4 +76,4 @@ const ParticipantComponent = ({
   );
 };
 
-export default ParticipantComponent;
+export default memo(ParticipantComponent);

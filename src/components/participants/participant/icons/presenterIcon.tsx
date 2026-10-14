@@ -10,14 +10,13 @@ interface IPresenterIconProps {
 
 const PresenterIcon = ({ userId }: IPresenterIconProps) => {
   const isPresenter = useAppSelector(
-    (state) =>
-      participantsSelector.selectById(state, userId)?.metadata.isPresenter,
+    (state) => participantsSelector.selectById(state, userId)?.metadata.isPresenter,
   );
 
   return (
     isPresenter && (
       <IconWrapper>
-        <i className="pnm-presenter text-Gray-950 text-sm 3xl:text-base" />
+        <i className="pnm-presenter text-Gray-950 dark:text-white text-sm 3xl:text-base" />
       </IconWrapper>
     )
   );

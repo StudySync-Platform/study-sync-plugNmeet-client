@@ -1,9 +1,6 @@
 import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  ChangeEtherpadStatusReqSchema,
-  CreateEtherpadSessionResSchema,
-} from 'plugnmeet-protocol-js';
+import { ChangeSharedNotepadStatusReqSchema, CommonResponseSchema } from 'plugnmeet-protocol-js';
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 
 import { store, useAppDispatch, useAppSelector } from '../../../../../store';
@@ -21,56 +18,32 @@ const useSharedNotepad = () => {
     };
   }, []);
 
-  const host = useAppSelector(
-    (state) =>
-      state.session.currentRoom.metadata?.roomFeatures?.sharedNotePadFeatures
-        ?.host,
-  );
   const sharedNotepadStatus = useAppSelector(
-    (state) =>
-      state.session.currentRoom.metadata?.roomFeatures?.sharedNotePadFeatures
-        ?.isActive,
+    (state) => state.session.currentRoom.metadata?.roomFeatures?.sharedNotePadFeatures?.isActive,
   );
 
   const toggleSharedNotepad = useCallback(async () => {
-    // If there's no host, we need to create the notepad.
-    if (!host) {
-      const r = await sendAPIRequest('etherpad/create', new Uint8Array());
-      const res = fromBinary(CreateEtherpadSessionResSchema, new Uint8Array(r));
-      if (res.status) {
-        dispatch(updateIsActiveSharedNotePad(true));
-      } else if (res.msg) {
-        dispatch(
-          addUserNotification({ message: t(res.msg), typeOption: 'error' }),
-        );
-      }
-      return;
-    }
-
-    // If a host exists, we just toggle the status.
     const newStatus = !sharedNotepadStatus;
-    const body = create(ChangeEtherpadStatusReqSchema, {
+    const body = create(ChangeSharedNotepadStatusReqSchema, {
       roomId,
       isActive: newStatus,
     });
 
     const r = await sendAPIRequest(
-      'etherpad/changeStatus',
-      toBinary(ChangeEtherpadStatusReqSchema, body),
+      'sharedNotepad/changeStatus',
+      toBinary(ChangeSharedNotepadStatusReqSchema, body),
       false,
       'application/protobuf',
       'arraybuffer',
     );
-    const res = fromBinary(CreateEtherpadSessionResSchema, new Uint8Array(r));
+    const res = fromBinary(CommonResponseSchema, new Uint8Array(r));
 
     if (res.status) {
       dispatch(updateIsActiveSharedNotePad(newStatus));
     } else if (res.msg) {
-      dispatch(
-        addUserNotification({ message: t(res.msg), typeOption: 'error' }),
-      );
+      dispatch(addUserNotification({ message: t(res.msg), typeOption: 'error' }));
     }
-  }, [host, sharedNotepadStatus, roomId, dispatch, t]);
+  }, [sharedNotepadStatus, roomId, dispatch, t]);
 
   return { toggleSharedNotepad, sharedNotepadStatus };
 };

@@ -13,6 +13,8 @@ import { pollsApi } from './services/pollsApi';
 import breakoutRoomSlice from './slices/breakoutRoomSlice';
 import { breakoutRoomApi } from './services/breakoutRoomApi';
 import speechServicesSlice from './slices/speechServicesSlice';
+import reactionsSlice from './slices/reactionsSlice';
+import { reactionsListener } from './middlewares/reactionsListener';
 
 declare const IS_PRODUCTION: boolean;
 
@@ -30,9 +32,11 @@ export const store = configureStore({
     [pollsApi.reducerPath]: pollsApi.reducer,
     [breakoutRoomApi.reducerPath]: breakoutRoomApi.reducer,
     speechServices: speechServicesSlice,
+    reactions: reactionsSlice,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware().concat(
+      reactionsListener.middleware,
       pollsApi.middleware,
       breakoutRoomApi.middleware,
     ),

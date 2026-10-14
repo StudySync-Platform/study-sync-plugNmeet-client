@@ -5,6 +5,7 @@ export interface IRadioOption {
   value: string | number;
   label: React.ReactNode;
   description?: string;
+  helpText?: string;
   disabled?: boolean;
 }
 
@@ -15,19 +16,11 @@ interface IRadioOptionsProps {
   onChange: (value: any) => void;
 }
 
-const RadioOptions = ({
-  options,
-  name,
-  checked,
-  onChange,
-}: IRadioOptionsProps) => {
+const RadioOptions = ({ options, name, checked, onChange }: IRadioOptionsProps) => {
   return (
-    <div className="mt-4 pl-2 space-y-4">
+    <div className="mt-4 ps-2 space-y-4">
       {options.map((option) => (
-        <div
-          key={option.id}
-          className={`relative my-2 ${option.disabled ? 'opacity-50' : ''}`}
-        >
+        <div key={option.id} className={`relative my-2 ${option.disabled ? 'opacity-50' : ''}`}>
           <div className="wrap flex items-center overflow-hidden">
             <input
               type="radio"
@@ -37,19 +30,22 @@ const RadioOptions = ({
               disabled={option.disabled}
               checked={checked === option.value}
               onChange={() => onChange(option.value)}
-              className="polls-checkbox relative appearance-none w-[18px] h-[18px] border border-Gray-300 shadow-button-shadow rounded-[6px] checked:bg-primary-color2-500 checked:border-Blue2-600"
+              className="polls-checkbox relative appearance-none w-[18px] h-[18px] border border-Gray-300 shadow-button-shadow rounded-[6px] checked:bg-Blue2-500 checked:border-Blue2-600 focus-ring"
             />
             <label
-              className="flex-1 text-sm text-Gray-900 w-full h-full z-10 pl-2 cursor-pointer"
+              className="flex-1 text-sm text-Gray-900 dark:text-white w-full h-full z-10 ps-2 cursor-pointer"
               htmlFor={option.id}
             >
               {option.label}
             </label>
           </div>
-          {option.description && (
-            <p className="text-xs text-Red-400 pl-[26px]">
-              {option.description}
+          {option.helpText && (
+            <p className="text-xs text-Gray-600 dark:text-Gray-300 ps-[26px] mt-1">
+              {option.helpText}
             </p>
+          )}
+          {option.description && (
+            <p className="text-xs text-Red-400 ps-[26px]">{option.description}</p>
           )}
         </div>
       ))}

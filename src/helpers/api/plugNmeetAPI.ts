@@ -6,12 +6,13 @@ import {
 } from 'plugnmeet-protocol-js';
 import { create, toBinary } from '@bufbuild/protobuf';
 
-import { getAccessToken } from '../utils';
+import { getAccessToken, getConfigValue } from '../utils';
 import { store } from '../../store';
 import { getNatsConn } from '../nats';
 
 const API = axios.create({
-  baseURL: (window as any).PLUG_N_MEET_SERVER_URL + '/api',
+  baseURL:
+    getConfigValue<string>('serverUrl', 'http://localhost:8080', 'PLUG_N_MEET_SERVER_URL') + '/api',
 });
 
 const getToken = () => {
@@ -73,13 +74,20 @@ const sendAPIRequest = async (
       msg: err.code + ': ' + err.message,
     };
 
-    // @ts-expect-error we'll check if the value is undefined
-    if (typeof err.response?.data?.msg !== 'undefined') {
-      // @ts-expect-error we checked if the value is undefined
-      output.msg = err.response?.data?.msg.replace(
-        'go-jose/go-jose/jwt',
-        err.response.statusText,
-      );
+    // @ts-ignore
+    if (err.response?.headers?.get('Content-Type') === 'application/json') {
+      // @ts-expect-error we'll check if the value is undefined
+      if (typeof err.response?.data?.msg !== 'undefined') {
+        // @ts-expect-error we checked if the value is undefined
+        output.msg = err.response?.data?.msg.replace(
+          'go-jose/go-jose/jwt',
+          err.response.statusText,
+        );
+      }
+    } else {
+      if (err.response?.data instanceof ArrayBuffer && err.response?.data.byteLength) {
+        return err.response?.data;
+      }
     }
 
     if (!json_encode) {

@@ -1,9 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  ChangeVisibilityRes,
-  ChangeVisibilityResSchema,
-} from 'plugnmeet-protocol-js';
+import { ChangeVisibilityRes, ChangeVisibilityResSchema } from 'plugnmeet-protocol-js';
 import { create, toBinary } from '@bufbuild/protobuf';
 import { debounce } from 'es-toolkit';
 
@@ -19,33 +16,26 @@ const WhiteboardIcon = () => {
   const isInitialMount = useRef(true);
   const isLocalAction = useRef(false);
 
-  const { showTooltip, allowedWhiteboard, currentUserId, isAdmin, isRecorder } =
-    useMemo(() => {
-      const session = store.getState().session;
-      const currentUser = session.currentUser;
-      return {
-        showTooltip: session.userDeviceType === 'desktop',
-        allowedWhiteboard:
-          session.currentRoom.metadata?.roomFeatures?.whiteboardFeatures
-            ?.allowedWhiteboard,
-        currentUserId: currentUser?.userId,
-        isAdmin: currentUser?.metadata?.isAdmin,
-        isRecorder: currentUser?.isRecorder,
-      };
-    }, []);
+  const { showTooltip, allowedWhiteboard, currentUserId, isAdmin, isRecorder } = useMemo(() => {
+    const session = store.getState().session;
+    const currentUser = session.currentUser;
+    return {
+      showTooltip: session.userDeviceType === 'desktop',
+      allowedWhiteboard: session.currentRoom.metadata?.roomFeatures?.whiteboardFeatures?.isAllow,
+      currentUserId: currentUser?.userId,
+      isAdmin: currentUser?.metadata?.isAdmin,
+      isRecorder: currentUser?.isRecorder,
+    };
+  }, []);
 
   const isActiveWhiteboard = useAppSelector(
     (state) => state.bottomIconsActivity.isActiveWhiteboard,
   );
   const isVisible = useAppSelector(
-    (state) =>
-      state.session.currentRoom.metadata?.roomFeatures?.whiteboardFeatures
-        ?.visible,
+    (state) => state.session.currentRoom.metadata?.roomFeatures?.whiteboardFeatures?.visible,
   );
   const isPresenter = useAppSelector(
-    (state) =>
-      !!participantsSelector.selectById(state, currentUserId ?? '')?.metadata
-        .isPresenter,
+    (state) => participantsSelector.selectById(state, currentUserId ?? '')?.metadata.isPresenter,
   );
 
   const canControlWhiteboard = useMemo(() => {
@@ -76,8 +66,7 @@ const WhiteboardIcon = () => {
   const debouncedSendRequest = useCallback(
     debounce(async (isActive: boolean) => {
       const currentRoom = store.getState().session.currentRoom;
-      const isVisible =
-        currentRoom.metadata?.roomFeatures?.whiteboardFeatures?.visible;
+      const isVisible = currentRoom.metadata?.roomFeatures?.whiteboardFeatures?.visible;
 
       if (isActive === isVisible) {
         return;
@@ -99,7 +88,7 @@ const WhiteboardIcon = () => {
       await sendRequest(body);
       // After sending, we can listen for remote changes again.
       isLocalAction.current = false;
-    }, 500),
+    }, 200),
     [],
   );
 
@@ -125,25 +114,27 @@ const WhiteboardIcon = () => {
     dispatch(updateIsActiveWhiteboard(!isActiveWhiteboard));
   }, [dispatch, isActiveWhiteboard]);
 
+  const tooltipText = isActiveWhiteboard
+    ? t('footer.icons.hide-whiteboard')
+    : t('footer.icons.show-whiteboard');
+
   return (
     allowedWhiteboard && (
-      <div
-        className={`whiteboard relative footer-icon cursor-pointer w-11 3xl:w-[52px] h-11 3xl:h-[52px] rounded-[15px] 3xl:rounded-[18px] border-[3px] 3xl:border-4 ${isActiveWhiteboard ? 'border-[rgba(124,206,247,0.25)]' : 'border-transparent'}`}
+      <button
+        type="button"
+        className={`whiteboard hidden md:block relative footer-icon cursor-pointer w-11 3xl:w-[52px] h-11 3xl:h-[52px] rounded-[15px] 3xl:rounded-[18px] border-[3px] 3xl:border-4 focus-ring ${isActiveWhiteboard ? 'border-[rgba(124,206,247,0.25)] dark:border-Gray-800' : 'border-transparent'}`}
         onClick={toggleWhiteboard}
+        aria-label={tooltipText.toString()}
       >
         <div
-          className={`h-full w-full flex items-center justify-center rounded-[12px] 3xl:rounded-[15px] border border-Gray-300 shadow transition-all duration-300 hover:bg-gray-100 text-Gray-950 ${
+          className={`footer-icon-bg h-full w-full flex items-center justify-center rounded-[12px] 3xl:rounded-[15px] border border-Gray-300  dark:border-Gray-700 shadow transition-all duration-300 hover:bg-gray-100 dark:hover:bg-Gray-700  text-Gray-950 dark:text-white ${
             showTooltip ? 'has-tooltip' : ''
-          } ${isActiveWhiteboard ? 'bg-gray-100' : 'bg-white'}`}
+          } ${isActiveWhiteboard ? 'bg-gray-100 dark:bg-Gray-700' : 'bg-white dark:bg-Gray-800'}`}
         >
-          <span className="tooltip">
-            {isActiveWhiteboard
-              ? t('footer.icons.hide-whiteboard')
-              : t('footer.icons.show-whiteboard')}
-          </span>
+          <span className="tooltip">{tooltipText}</span>
           <WhiteBoardIconSVG />
         </div>
-      </div>
+      </button>
     )
   );
 };

@@ -1,29 +1,41 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
+import { once } from 'es-toolkit';
 
 import {
-  ColumnCameraPosition,
-  ColumnCameraWidth,
-} from '../../store/slices/interfaces/roomSettings';
-import {
-  updateColumnCameraPosition,
-  updateColumnCameraWidth,
   updateFocusActiveSpeakerWebcam,
+  updateMaxNumDisplayWebcams,
 } from '../../store/slices/roomSettingsSlice';
 import { useAppDispatch } from '../../store';
+import { getConfigValue } from '../utils';
+import { IMaxNumDisplayWebcams } from '../../store/slices/interfaces/roomSettings';
 
 export interface ICustomDesignParams {
   primary_color?: string;
+  primary_btn_bg_color?: string;
+  primary_btn_text_color?: string;
+
   secondary_color?: string;
+  secondary_btn_bg_color?: string;
+  secondary_btn_text_color?: string;
+
   background_color?: string;
   background_image?: string;
+
   header_bg_color?: string;
   footer_bg_color?: string;
-  left_side_bg_color?: string;
+  footer_icon_bg_color?: string;
+  footer_icon_color?: string;
+
+  // @deprecated  Use `side-panel-bg-color` instead.
   right_side_bg_color?: string;
+  side_panel_bg_color?: string;
+
   custom_css_url?: string;
   custom_logo?: string;
-  column_camera_width?: ColumnCameraWidth;
-  column_camera_position?: ColumnCameraPosition;
+}
+
+function isObject(value: any): value is object {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 const useClientCustomization = () => {
@@ -31,210 +43,186 @@ const useClientCustomization = () => {
 
   // different config related customization
   useEffect(() => {
-    const focusActiveSpeakerWebcam =
-      typeof (window as any).FOCUS_ACTIVE_SPEAKER_WEBCAM !== 'undefined'
-        ? (window as any).FOCUS_ACTIVE_SPEAKER_WEBCAM
-        : true;
+    const focusActiveSpeakerWebcam = getConfigValue<boolean>(
+      'focusActiveSpeakerWebcam',
+      true,
+      'FOCUS_ACTIVE_SPEAKER_WEBCAM',
+    );
     dispatch(updateFocusActiveSpeakerWebcam(focusActiveSpeakerWebcam));
+
+    const maxNumDisplayWebcams = getConfigValue<IMaxNumDisplayWebcams>('maxNumDisplayWebcams');
+
+    if (
+      maxNumDisplayWebcams &&
+      isObject(maxNumDisplayWebcams) &&
+      (maxNumDisplayWebcams.desktop || maxNumDisplayWebcams.tablet || maxNumDisplayWebcams.mobile)
+    ) {
+      dispatch(updateMaxNumDisplayWebcams(maxNumDisplayWebcams));
+    }
   }, [dispatch]);
+
+  // oxlint-disable-next-line exhaustive-deps
+  const freezeConfig = useCallback(
+    // oxlint-disable-next-line react/use-memo
+    once(() => {
+      setTimeout(() => {
+        const config = (window as any).plugNmeetConfig;
+        if (config && typeof config === 'object') {
+          // 1. Freeze the configuration object to make its properties read-only.
+          // This prevents accidental modifications to the object's contents.
+          Object.freeze(config);
+
+          // 2. Redefine the property on the window object to be non-writable and non-configurable.
+          // This prevents the entire `plugNmeetConfig` object from being reassigned (e.g., to null) or deleted.
+          Object.defineProperty(window, 'plugNmeetConfig', {
+            value: config,
+            writable: false,
+            configurable: false,
+          });
+        }
+      }, 500);
+    }),
+    [],
+  );
 
   // design customization
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
-    const custom_design = urlParams.get('custom_design');
+    let customDesign = urlParams.get('custom_design');
 
-    if (custom_design && custom_design !== '' && custom_design !== '{}') {
-      // we'll override if custom design sent by URL
-      (window as any).DESIGN_CUSTOMIZATION = custom_design;
+    if (!customDesign || customDesign === '{}') {
+      customDesign = getConfigValue<string>(
+        'designCustomization',
+        undefined,
+        'DESIGN_CUSTOMIZATION',
+      );
+    } else {
+      // set customization value from URL
+      (window as any).plugNmeetConfig.designCustomization = customDesign;
     }
 
-    if (typeof (window as any).DESIGN_CUSTOMIZATION === 'undefined') {
+    if (!customDesign || customDesign === '{}') {
+      freezeConfig();
       return;
     }
 
     let designCustomParams: ICustomDesignParams = {};
-    try {
-      designCustomParams = JSON.parse((window as any).DESIGN_CUSTOMIZATION);
-      console.log('designCustomParams', designCustomParams);
-    } catch (e) {
-            console.log('designCustomParams',  JSON.parse((window as any).DESIGN_CUSTOMIZATION));
-
-      console.error("can't parse custom design params", e);
-      return;
+    if (typeof customDesign === 'object') {
+      designCustomParams = customDesign;
+    } else {
+      try {
+        designCustomParams = JSON.parse(customDesign);
+      } catch (e) {
+        console.error("can't parse custom design params", e);
+        freezeConfig();
+        return;
+      }
     }
+
+    // first set the logo
+    if (designCustomParams.custom_logo) {
+      // from design params let's assume logo will be only light to reduce complexity
+      (window as any).plugNmeetConfig.customLogo = {
+        main_logo_light: designCustomParams.custom_logo,
+        main_logo_dark: designCustomParams.custom_logo,
+      };
+    }
+    freezeConfig();
 
     let css = '';
 
     if (designCustomParams.primary_color) {
-      css += '.primaryColor{ color: ' + designCustomParams.primary_color + '}';
-      css +=
-        '.text-primary-color { color: ' +
-        designCustomParams.primary_color +
-        '}';
-      css +=
-        '.placeholder\\:text-primaryColor\\/70::placeholder { color: ' +
-        designCustomParams.primary_color +
-        '}';
-      css +=
-        '.bg-primary-color { background: ' +
-        designCustomParams.primary_color +
-        ' !important;}';
-      css +=
-        '.hover\\:bg-primaryColor:hover { background: ' +
-        designCustomParams.primary_color +
-        ' !important;}';
-      css +=
-        '.border-primary-color { border-color: ' +
-        designCustomParams.primary_color +
-        ' !important;}';
-      css +=
-        '.excalidraw {\n' +
-        '    --color-primary: ' +
-        designCustomParams.primary_color +
-        ';\n' +
-        '    --color-primary-darker: ' +
-        designCustomParams.primary_color +
-        ';\n' +
-        '    --color-primary-darkest: ' +
-        designCustomParams.primary_color +
-        ';\n' +
-        '}';
+      const color = designCustomParams.primary_color;
+      css += `body:not(.dark) .primaryColor{ color: ${color}}`;
+      css += `body:not(.dark) .text-primary-color { color: ${color}}`;
+      css += `body:not(.dark) .placeholder\\:text-primaryColor\\/70::placeholder { color: ${color}}`;
+      css += `body:not(.dark) .bg-primary-color { background: ${color} !important;}`;
+      css += `body:not(.dark) .hover\\:bg-primaryColor:hover { background: ${color} !important;}`;
+      css += `body:not(.dark) .border-primary-color { border-color: ${color} !important;}`;
+      css += `body:not(.dark) .excalidraw {
+        --color-primary: ${color};
+        --color-primary-darker: ${color};
+        --color-primary-darkest: ${color};
+      }`;
     }
 
     if (designCustomParams.secondary_color) {
-      css +=
-        '.secondaryColor { color: ' +
-        designCustomParams.secondary_color +
-        ' !important;}';
-      css +=
-        '.text-secondary-color { color: ' +
-        designCustomParams.secondary_color +
-        ' !important;}';
-      css +=
-        '.bg-secondary-color { background: ' +
-        designCustomParams.secondary_color +
-        ' !important;}';
-      css +=
-        '.hover\\:text-secondaryColor:hover { color: ' +
-        designCustomParams.secondary_color +
-        ' !important;}';
-      css +=
-        '.group:hover .group-hover\\:text-secondaryColor { color: ' +
-        designCustomParams.secondary_color +
-        ' !important;}';
-      css +=
-        '.bg-secondaryColor, .hover:bg-secondaryColor:hover { background: ' +
-        designCustomParams.secondary_color +
-        ' !important;}';
-      css +=
-        '.hover:bg-secondaryColor:hover { background: ' +
-        designCustomParams.secondary_color +
-        ' !important;}';
-      css +=
-        '.border-secondary-color { border-color: ' +
-        designCustomParams.secondary_color +
-        ' !important;}';
-      css +=
-        '.excalidraw {\n' +
-        '    --color-primary-light: ' +
-        designCustomParams.secondary_color +
-        ';\n' +
-        '}';
+      const color = designCustomParams.secondary_color;
+      css += `body:not(.dark) .secondaryColor { color: ${color} !important;}`;
+      css += `body:not(.dark) .text-secondary-color { color: ${color} !important;}`;
+      css += `body:not(.dark) .bg-secondary-color { background: ${color} !important;}`;
+      css += `body:not(.dark) .hover\\:text-secondaryColor:hover { color: ${color} !important;}`;
+      css += `body:not(.dark) .group:hover .group-hover\\:text-secondaryColor { color: ${color} !important;}`;
+      css += `body:not(.dark) .bg-secondaryColor, .hover:bg-secondaryColor:hover { background: ${color} !important;}`;
+      css += `body:not(.dark) .hover:bg-secondaryColor:hover { background: ${color} !important;}`;
+      css += `body:not(.dark) .border-secondary-color { border-color: ${color} !important;}`;
+      css += `body:not(.dark) .excalidraw { --color-primary-light: ${color}; }`;
     }
 
     if (designCustomParams.background_image) {
-      css += `.main-app-bg { 
+      css += `body:not(.dark) #main-area, body:not(.dark) .error-app-bg, body:not(.dark) .waiting-room { 
         background: url("${designCustomParams.background_image}") !important;
         background-position: center !important;
         background-repeat: no-repeat !important;
         background-size: cover !important;
-        }`;
-      css += `.error-app-bg { 
-        background: url("${designCustomParams.background_image}") !important;
-        background-position: center !important;
-        background-repeat: no-repeat !important;
-        background-size: cover !important;
-        }`;
-      css += `.waiting-room { 
-        background: url("${designCustomParams.background_image}") !important;
-        background-position: center !important;
-        background-repeat: no-repeat !important;
-        background-size: cover !important;
-        }`;
+      }`;
     } else if (designCustomParams.background_color) {
-      css += `.main-app-bg { 
+      css += `body:not(.dark) #main-area, body:not(.dark) .error-app-bg, body:not(.dark) .waiting-room { 
         background: ${designCustomParams.background_color} !important;
-        }`;
-      css += `.error-app-bg { 
-        background: ${designCustomParams.background_color} !important;
-        }`;
-      css += `.waiting-room { 
-        background: ${designCustomParams.background_color} !important;
-        }`;
+      }`;
     }
 
     if (designCustomParams.header_bg_color) {
-      css +=
-        'header#main-header { background: ' +
-        designCustomParams.header_bg_color +
-        '; }';
+      css += `body:not(.dark) header#main-header { background: ${designCustomParams.header_bg_color}; }`;
     }
 
     if (designCustomParams.footer_bg_color) {
-      css +=
-        'footer#main-footer { background: ' +
-        designCustomParams.footer_bg_color +
-        '; }';
+      css += `body:not(.dark) footer#main-footer { background: ${designCustomParams.footer_bg_color}; }`;
     }
 
-    if (designCustomParams.left_side_bg_color) {
-      css +=
-        '.participants-wrapper { background: ' +
-        designCustomParams.left_side_bg_color +
-        '; }';
-      css +=
-        '.vertical-webcams { background: ' +
-        designCustomParams.left_side_bg_color +
-        ' !important; }';
-    }
-
-    if (designCustomParams.right_side_bg_color) {
-      css +=
-        '.messageModule-wrapper { background: ' +
-        designCustomParams.right_side_bg_color +
-        '; }';
-    }
-
-    if (
-      designCustomParams.column_camera_width &&
-      (designCustomParams.column_camera_width ===
-        ColumnCameraWidth.SMALL_WIDTH ||
-        designCustomParams.column_camera_width ===
-          ColumnCameraWidth.MEDIUM_WIDTH ||
-        designCustomParams.column_camera_width === ColumnCameraWidth.FULL_WIDTH)
-    ) {
-      dispatch(updateColumnCameraWidth(designCustomParams.column_camera_width));
-    }
-
-    if (
-      designCustomParams.column_camera_position &&
-      (designCustomParams.column_camera_position === ColumnCameraPosition.TOP ||
-        designCustomParams.column_camera_position ===
-          ColumnCameraPosition.BOTTOM ||
-        designCustomParams.column_camera_position === ColumnCameraPosition.LEFT)
-    ) {
-      dispatch(
-        updateColumnCameraPosition(designCustomParams.column_camera_position),
-      );
-    }
-
-    if (typeof (window as any).CUSTOM_LOGO === 'undefined') {
-      if (designCustomParams.custom_logo) {
-        // from design params let's assume logo will be only light to reduce complexity
-        (window as any).CUSTOM_LOGO = {
-          main_logo_light: designCustomParams.custom_logo,
-        };
+    if (designCustomParams.footer_icon_bg_color && designCustomParams.footer_icon_color) {
+      css += `body:not(.dark) .footer-icon-bg { background: ${designCustomParams.footer_icon_bg_color}; color: ${designCustomParams.footer_icon_color}; }`;
+    } else {
+      if (designCustomParams.footer_icon_bg_color) {
+        css += `body:not(.dark) .footer-icon-bg { background: ${designCustomParams.footer_icon_bg_color}; }`;
       }
+      if (designCustomParams.footer_icon_color) {
+        css += `body:not(.dark) .footer-icon-bg { color: ${designCustomParams.footer_icon_color}; }`;
+      }
+    }
+
+    // Primary button customization
+    const primaryBtnBg =
+      designCustomParams.primary_btn_bg_color || designCustomParams.primary_color;
+    const primaryBtnText = designCustomParams.primary_btn_text_color;
+
+    if (primaryBtnBg) {
+      if (designCustomParams.primary_btn_bg_color || designCustomParams.primary_color) {
+        css += `body:not(.dark) .primary-button { background: ${primaryBtnBg}; }`;
+      }
+      if (primaryBtnText) {
+        css += `body:not(.dark) .primary-button { color: ${primaryBtnText}; }`;
+      }
+    }
+
+    // Secondary button customization
+    const secondaryBtnBg =
+      designCustomParams.secondary_btn_bg_color || designCustomParams.secondary_color;
+    const secondaryBtnText = designCustomParams.secondary_btn_text_color;
+
+    if (secondaryBtnBg) {
+      if (designCustomParams.secondary_btn_bg_color || designCustomParams.secondary_color) {
+        css += `body:not(.dark) .secondary-button { background: ${secondaryBtnBg}; }`;
+      }
+      if (secondaryBtnText) {
+        css += `body:not(.dark) .secondary-button { color: ${secondaryBtnText}; }`;
+      }
+    }
+
+    const sidePanelBgColor =
+      designCustomParams.side_panel_bg_color || designCustomParams.right_side_bg_color;
+    if (sidePanelBgColor) {
+      css += `body:not(.dark) .side-panel-bg-color { background: ${sidePanelBgColor}; }`;
     }
 
     const head = document.head;
@@ -242,11 +230,9 @@ const useClientCustomization = () => {
 
     if (designCustomParams.custom_css_url) {
       link = document.createElement('link');
-
       link.type = 'text/css';
       link.rel = 'stylesheet';
       link.href = designCustomParams.custom_css_url;
-
       head.appendChild(link);
     }
 
@@ -259,13 +245,17 @@ const useClientCustomization = () => {
 
     return () => {
       if (css !== '') {
-        head.removeChild(style);
+        const customStyle = document.getElementById('plugNmeetCustomization');
+        if (customStyle) {
+          head.removeChild(customStyle);
+        }
       }
-      if (designCustomParams.custom_css_url) {
+      if (designCustomParams.custom_css_url && link) {
         head.removeChild(link);
       }
     };
-  }, [dispatch]);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [dispatch, freezeConfig]);
 };
 
 export default useClientCustomization;

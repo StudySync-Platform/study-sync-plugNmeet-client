@@ -4,53 +4,45 @@ import react from '@vitejs/plugin-react';
 import { viteStaticCopy, ViteStaticCopyOptions } from 'vite-plugin-static-copy';
 import tailwindcss from '@tailwindcss/vite';
 import oxlintPlugin from 'vite-plugin-oxlint';
+import cleanPlugin from 'vite-plugin-clean';
 
 const isProduction = process.env.NODE_ENV === 'production';
-const BUILD_INTERVAL = 1500;
 
 export default defineConfig({
-  root: join(__dirname, 'src'),
+  root: join(import.meta.dirname, 'src'),
   base: '',
   resolve: {
     extensions: ['.tsx', '.ts', '.js', '.jsx'],
     alias: {
-      '@tensorflow/tfjs$': resolve(__dirname, './custom_tfjs/custom_tfjs.js'),
-      '@tensorflow/tfjs-core$': resolve(
-        __dirname,
-        './custom_tfjs/custom_tfjs_core.js',
-      ),
-      '~': resolve(__dirname, 'src'),
+      '~': resolve(import.meta.dirname, 'src'),
     },
   },
   server: {
     port: 3000,
-    watch: {
-      interval: BUILD_INTERVAL,
-    },
-  },
-  experimental: {
-    enableNativePlugin: true,
   },
   build: {
     outDir: '../dist',
-    emptyOutDir: true,
+    emptyOutDir: false,
     sourcemap: !isProduction,
+    assetsInlineLimit: 0,
+    chunkSizeWarningLimit: 6000,
     rolldownOptions: {
       output: {
         entryFileNames: 'assets/js/main-module.[hash].js',
         chunkFileNames: 'assets/chunks/[name].[hash].js',
         assetFileNames: ({ names }) => assetFileNames(names),
-        advancedChunks: {
-          groups: [
-            {
-              name: (moduleId: string) => manualChunks(moduleId),
-            },
-          ],
-        },
+        manualChunks: manualChunks,
       },
       watch: {
         exclude: 'node_modules/**',
-        buildDelay: BUILD_INTERVAL,
+      },
+    },
+  },
+  worker: {
+    format: 'iife',
+    rolldownOptions: {
+      output: {
+        entryFileNames: 'assets/worker/[name].[hash].js',
       },
     },
   },
@@ -59,6 +51,14 @@ export default defineConfig({
     tailwindcss(),
     viteStaticCopy(getStaticFilesToCopy()),
     oxlintPlugin(),
+    cleanPlugin({
+      targetFiles: [
+        'dist/assets/js',
+        'dist/assets/css',
+        'dist/assets/chunks',
+        'dist/assets/worker',
+      ],
+    }),
   ],
   define: {
     IS_PRODUCTION: isProduction,
@@ -88,11 +88,8 @@ function assetFileNames(names: string[]) {
 }
 
 const vendorChunkMap: Record<string, string[]> = {
-  tensorflow: ['@tensorflow'],
   mermaid: ['mermaid'],
   excalidraw: ['@excalidraw'],
-  'microsoft-speech-sdk': ['microsoft-cognitiveservices-speech-sdk'],
-  utils: ['lodash', 'validator'],
   'react-libs': [
     'react-dnd',
     'dnd-core',
@@ -112,29 +109,35 @@ function manualChunks(id: string) {
     return null;
   }
 
-  const modulePath = id.split('node_modules/')[1];
-  const topLevelFolder = modulePath.split('/')[0];
-  if (topLevelFolder !== '.pnpm') {
-    return topLevelFolder;
-  }
-
+  // Ensure CSS from dependencies is grouped with vendor
   if (id.endsWith('.css')) {
     return 'vendor';
-  } else if (id.endsWith('.js')) {
-    const packageName = modulePath.split('/')[1];
-    for (const chunk in vendorChunkMap) {
-      if (vendorChunkMap[chunk].some((pkg) => packageName.includes(pkg))) {
-        return chunk;
-      }
-    }
+  }
 
-    if (/react(-dom)?/.test(packageName)) {
-      return 'react';
-    } else {
-      // If we can't find a specific chunk, we can return 'vendor'
-      return 'vendor';
+  // Grouping logic based on path
+  for (const chunk in vendorChunkMap) {
+    if (
+      vendorChunkMap[chunk].some(
+        (pkg) =>
+          id.includes(`/node_modules/${pkg}/`) ||
+          new RegExp(`/\\.pnpm/${pkg}(@|/)`).test(id),
+      )
+    ) {
+      return chunk;
     }
   }
+
+  // Group React ecosystem
+  if (
+    id.includes('/node_modules/react/') ||
+    id.includes('/node_modules/react-dom/') ||
+    id.includes('/.pnpm/react@') ||
+    id.includes('/.pnpm/react-dom@')
+  ) {
+    return 'react';
+  }
+
+  return 'vendor';
 }
 
 function getStaticFilesToCopy(): ViteStaticCopyOptions {
@@ -147,15 +150,11 @@ function getStaticFilesToCopy(): ViteStaticCopyOptions {
           'assets/imgs',
           'assets/locales',
           'assets/lti',
-          'assets/models',
           'assets/config_sample.js',
           !isProduction ? 'assets/config.js' : '',
         ].filter(Boolean),
         dest: 'assets/',
-      },
-      {
-        src: 'assets/tflite/*',
-        dest: 'assets/js/',
+        rename: { stripBase: 1 },
       },
       {
         src: 'login.html',

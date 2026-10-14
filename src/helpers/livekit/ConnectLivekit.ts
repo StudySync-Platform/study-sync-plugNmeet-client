@@ -1,21 +1,18 @@
 import { Dispatch } from 'react';
 import {
-  ConnectionQuality,
   ConnectionState,
   DisconnectReason,
   ExternalE2EEKeyProvider,
   isE2EESupported,
-  LocalParticipant,
-  LocalTrackPublication,
-  Participant,
   RemoteParticipant,
   RemoteTrackPublication,
   Room,
+  RoomConnectOptions,
   RoomEvent,
   RoomOptions,
   supportsAV1,
   supportsVP9,
-  Track,
+  VideoCodec,
   VideoPresets,
 } from 'livekit-client';
 import { EventEmitter } from 'eventemitter3';
@@ -23,163 +20,279 @@ import {
   AnalyticsEvents,
   AnalyticsEventType,
   DataMsgBodyType,
+  MediaServerConnInfo,
 } from 'plugnmeet-protocol-js';
 import { toast } from 'react-toastify';
 // @ts-expect-error not an error
-import LkWorker from 'livekit-client/e2ee-worker?worker';
+import LkWorkerUrl from 'livekit-client/e2ee-worker?worker&url';
+
+import ParticipantMediaManager from './ParticipantMediaManager';
+import HandleMediaTracks from './HandleMediaTracks';
 
 import { store } from '../../store';
-import {
-  participantsSelector,
-  updateParticipant,
-} from '../../store/slices/participantSlice';
-import {
-  updateScreenSharing,
-  updateTotalAudioSubscribers,
-  updateTotalVideoSubscribers,
-} from '../../store/slices/sessionSlice';
-
-import HandleMediaTracks from './HandleMediaTracks';
+import { updateParticipant } from '../../store/slices/participantSlice';
 import { IErrorPageProps } from '../../components/extra-pages/Error';
-import { CurrentConnectionEvents, IConnectLivekit, LivekitInfo } from './types';
+import { IConnectLivekit } from './types';
 import i18n from '../i18n';
-import { IScreenSharing } from '../../store/slices/interfaces/session';
 import { getNatsConn } from '../nats';
 import { roomConnectionStatus } from '../../components/app/helper';
-import { addUserNotification } from '../../store/slices/roomSettingsSlice';
-import { activeSpeakersSelector } from '../../store/slices/activeSpeakersSlice';
+import {
+  getConfigValue,
+  isFirefoxMobile,
+  isUserRecorder,
+  toNativeTwinIdentity,
+  toPlugNmeetUserId,
+} from '../utils';
+import { CorsWorker } from '../libs/corsWorker';
+import ConnectionQualityMonitor, {
+  PnmConnectionQuality,
+  QualityStats,
+} from './ConnectionQualityMonitor';
+import AdaptiveMediaController from './AdaptiveMediaController';
+import { updateOverallConnectionQuality } from '../../store/slices/sessionSlice';
+import {
+  initializeNativePublisher,
+  nativeBridge,
+  startNativeHeartbeat,
+  teardownNativePublisher,
+} from '../nativeBridge';
 
-export default class ConnectLivekit
-  extends EventEmitter
-  implements IConnectLivekit
-{
-  private _audioSubscribersMap = new Map<string, RemoteParticipant>();
-  private _videoSubscribersMap = new Map<
-    string,
-    Participant | LocalParticipant | RemoteParticipant
-  >();
-  private _screenShareTracksMap = new Map<
-    string,
-    Array<LocalTrackPublication | RemoteTrackPublication>
-  >();
+const FALLBACK_TIMER_DURATION = 60 * 1000; // 60 seconds
 
+export default class ConnectLivekit extends EventEmitter implements IConnectLivekit {
   private readonly _errorState: Dispatch<IErrorPageProps>;
   private readonly _roomConnectionStatusState: Dispatch<roomConnectionStatus>;
-
-  private readonly token: string;
   private readonly localUserId: string;
-  private readonly _room: Room;
-  private readonly url: string;
   private readonly enabledE2EE: boolean = false;
   private readonly encryptionKey: string | undefined = '';
+
+  private readonly handleMediaTracks: HandleMediaTracks;
+  private readonly participantMediaManager: ParticipantMediaManager;
+
+  private _room!: Room;
   private readonly _e2eeKeyProvider: ExternalE2EEKeyProvider;
   private toastIdConnecting: number | string | undefined = undefined;
   private wasNormalDisconnected: boolean = false;
+  // for silent fallback
+  private fallbackTimer: NodeJS.Timeout | null = null;
+  private hasAttemptedSilentFallback: boolean = false;
+  private serverInfo: MediaServerConnInfo | undefined = undefined;
+  private poorConnectionTimestamps: number[] = [];
 
-  private handleMediaTracks: HandleMediaTracks;
+  private lastReportedConnectionQuality: PnmConnectionQuality | null = null;
+  private lastDispatchedOverallQuality: PnmConnectionQuality | null = null;
+  private readonly connectionQualityMonitor: ConnectionQualityMonitor;
+  private readonly adaptiveMediaController: AdaptiveMediaController;
 
   constructor(
-    livekitInfo: LivekitInfo,
     errorState: Dispatch<IErrorPageProps>,
     roomConnectionStatusState: Dispatch<roomConnectionStatus>,
     localUserId: string,
+    enabledE2EE: boolean,
+    encryptionKey?: string,
   ) {
     super();
-    this.token = livekitInfo.token;
     this.localUserId = localUserId;
-    this.url = livekitInfo.livekit_host;
-
     this._errorState = errorState;
     this._roomConnectionStatusState = roomConnectionStatusState;
 
     this._e2eeKeyProvider = new ExternalE2EEKeyProvider();
-    if (livekitInfo.enabledE2EE) {
-      this.enabledE2EE = livekitInfo.enabledE2EE;
-      this.encryptionKey = livekitInfo.encryption_key;
+    if (enabledE2EE && encryptionKey) {
+      this.enabledE2EE = enabledE2EE;
+      this.encryptionKey = encryptionKey;
     }
-
     this.handleMediaTracks = new HandleMediaTracks(this);
+    this.participantMediaManager = new ParticipantMediaManager(this, this.localUserId);
+    void this.configureRoom();
 
-    // clean session data
-    sessionStorage.clear();
-    // configure room
-    this._room = this.configureRoom();
+    this.connectionQualityMonitor = new ConnectionQualityMonitor();
+    this.adaptiveMediaController = new AdaptiveMediaController(() => this._room, {
+      enabled: !isUserRecorder(this.localUserId),
+    });
+    window.addEventListener('beforeunload', this.onBeforeUnload);
   }
 
+  private onBeforeUnload = () => {
+    this.adaptiveMediaController.dispose();
+    this.connectionQualityMonitor.stop();
+    teardownNativePublisher();
+  };
+
   public get videoSubscribersMap() {
-    return this._videoSubscribersMap;
+    return this.participantMediaManager.videoSubscribersMap;
+  }
+
+  /**
+   * Returns the video-subscriber participant stored under the given PRIMARY
+   * user id. Use this instead of Room.getParticipantByIdentity, which fails
+   * for hybrid native-twin participants (identity "[userID]-native").
+   */
+  public getVideoSubscriberParticipant(userId: string) {
+    return this.participantMediaManager.getVideoSubscriberParticipant(userId);
   }
 
   public get audioSubscribersMap() {
-    return this._audioSubscribersMap;
+    return this.participantMediaManager.audioSubscribersMap;
   }
 
   public get screenShareTracksMap() {
-    return this._screenShareTracksMap;
+    return this.participantMediaManager.screenShareTracksMap;
   }
 
   public get room() {
     return this._room;
   }
 
-  public get e2eeKeyProvider() {
-    return this._e2eeKeyProvider;
+  public get qualityMonitor(): ConnectionQualityMonitor {
+    return this.connectionQualityMonitor;
   }
 
-  public connect = async () => {
-    this._roomConnectionStatusState('media-server-conn-start');
+  public get adaptiveMedia(): AdaptiveMediaController {
+    return this.adaptiveMediaController;
+  }
+
+  public initializeConnection = async (serverInfo: MediaServerConnInfo): Promise<boolean> => {
+    this.serverInfo = serverInfo;
 
     try {
-      await this._room.connect(this.url, this.token);
       if (this.enabledE2EE && this.encryptionKey) {
         await this._e2eeKeyProvider.setKey(this.encryptionKey);
         await this._room.setE2EEEnabled(true);
       }
-      // we'll prepare our information
-      await this.initiateParticipants();
+
+      let opts: RoomConnectOptions | undefined;
+      if (serverInfo.turnCredentials) {
+        const policy: RTCIceTransportPolicy =
+          isFirefoxMobile() || !serverInfo.turnCredentials.forceTurn ? 'all' : 'relay';
+
+        opts = {
+          rtcConfig: {
+            iceServers: [
+              {
+                username: serverInfo.turnCredentials.username,
+                credential: serverInfo.turnCredentials.password,
+                urls: serverInfo.turnCredentials.uris,
+              },
+            ],
+            iceTransportPolicy: policy,
+          },
+        };
+      }
+
+      await this._room.connect(serverInfo.url, serverInfo.token, opts);
       this._roomConnectionStatusState('media-server-conn-established');
+      // start connection quality monitor
+      this.connectionQualityMonitor.start(this._room, this.checkConnectionQualityForFallback);
+
+      this.adaptiveMediaController.attach();
+
+      // Hybrid mode: if the server sent a native publish token, hand it to the
+      // native host over the bridge and start the liveness heartbeat.
+      if (serverInfo.nativeToken) {
+        // start our listener first
+        nativeBridge.start();
+        const e2ee =
+          this.enabledE2EE && this.encryptionKey
+            ? { enabled: true, key: this.encryptionKey }
+            : undefined;
+        initializeNativePublisher(
+          serverInfo.url,
+          serverInfo.nativeToken,
+          toNativeTwinIdentity(this.localUserId),
+          e2ee,
+        );
+        startNativeHeartbeat();
+      }
+
+      return true;
     } catch (error) {
       console.error(error);
       this._roomConnectionStatusState('error');
       this._errorState({
-        title: 'Error',
+        title: i18n.t('error'),
         text: String(error),
       });
+      return false;
     }
   };
 
-  private configureRoom = () => {
-    let videoCodec = (window as any).VIDEO_CODEC ?? 'vp8';
-    if (
-      (videoCodec === 'vp9' && !supportsVP9()) ||
-      (videoCodec === 'av1' && !supportsAV1())
-    ) {
+  private executeSilentRelayFallback = () => {
+    // Clear any pending timer as we are now executing.
+    if (this.fallbackTimer) {
+      clearTimeout(this.fallbackTimer);
+      this.fallbackTimer = null;
+    }
+
+    if (this.hasAttemptedSilentFallback) {
+      console.log('[Fallback] Already attempted, skipping.');
+      return;
+    }
+    this.hasAttemptedSilentFallback = true;
+
+    if (!this.serverInfo?.turnCredentials) {
+      console.error('[Fallback] Cannot attempt fallback: TURN credentials are not configured.');
+      return;
+    }
+
+    toast.info(i18n.t('notifications.re-routing-connection'), {
+      autoClose: 4000,
+    });
+
+    try {
+      const pcManager = this._room.engine.pcManager;
+      if (!pcManager || !pcManager.updateConfiguration) {
+        console.error('PCManager or updateConfiguration method not available.');
+        this.hasAttemptedSilentFallback = false; // Allow another try
+        return;
+      }
+
+      const config = this._room.engine.rtcConfig;
+      config.iceTransportPolicy = 'relay';
+
+      console.log('Updating configuration and restarting ICE with relay-only policy...');
+      pcManager.updateConfiguration(config, true);
+    } catch (e) {
+      console.error('Failed to execute silent relay fallback:', e);
+      this.hasAttemptedSilentFallback = false; // Allow another try on error
+    }
+  };
+
+  private async configureRoom() {
+    let videoCodec = getConfigValue<VideoCodec>('videoCodec', 'vp8', 'VIDEO_CODEC');
+    if ((videoCodec === 'vp9' && !supportsVP9()) || (videoCodec === 'av1' && !supportsAV1())) {
       videoCodec = 'vp8';
     }
 
+    // disable adaptiveStream for recorder
+    const isRecorder = isUserRecorder(this.localUserId);
+    const adaptiveStream = isRecorder
+      ? false
+      : getConfigValue<boolean>('enableAdaptiveStream', true, 'ENABLE_ADAPTIVE_STREAM');
+
     const roomOptions: RoomOptions = {
-      adaptiveStream: true,
-      dynacast: (window as any).ENABLE_DYNACAST ?? false,
+      adaptiveStream,
+      dynacast: getConfigValue<boolean>('enableDynacast', false, 'ENABLE_DYNACAST'),
       stopLocalTrackOnUnpublish: true,
       videoCaptureDefaults: {
         resolution: VideoPresets.h720.resolution,
       },
       publishDefaults: {
-        simulcast: (window as any).ENABLE_SIMULCAST ?? false,
-        videoSimulcastLayers: [
-          VideoPresets.h90,
-          VideoPresets.h180,
-          VideoPresets.h360,
-        ],
-        stopMicTrackOnMute: (window as any).STOP_MIC_TRACK_ON_MUTE ?? false,
+        simulcast: getConfigValue<boolean>('enableSimulcast', false, 'ENABLE_SIMULCAST'),
+        videoSimulcastLayers: [VideoPresets.h90, VideoPresets.h180, VideoPresets.h360],
+        stopMicTrackOnMute: getConfigValue<boolean>(
+          'stopMicTrackOnMute',
+          false,
+          'STOP_MIC_TRACK_ON_MUTE',
+        ),
         videoCodec: videoCodec,
       },
     };
 
     if (this.enabledE2EE && isE2EESupported()) {
-      roomOptions.e2ee = {
+      const LkWorker = await CorsWorker.create(LkWorkerUrl);
+      roomOptions.encryption = {
         keyProvider: this._e2eeKeyProvider,
-        worker: new LkWorker(),
+        worker: LkWorker,
       };
     }
 
@@ -210,71 +323,48 @@ export default class ConnectLivekit
     room.on(RoomEvent.Disconnected, this.onDisconnected);
     room.on(RoomEvent.MediaDevicesError, this.mediaDevicesError);
 
-    room.on(
-      RoomEvent.LocalTrackPublished,
-      this.handleMediaTracks.localTrackPublished,
-    );
-    room.on(
-      RoomEvent.LocalTrackUnpublished,
-      this.handleMediaTracks.localTrackUnpublished,
-    );
+    room.on(RoomEvent.LocalTrackPublished, this.handleMediaTracks.localTrackPublished);
+    room.on(RoomEvent.LocalTrackUnpublished, this.handleMediaTracks.localTrackUnpublished);
     room.on(RoomEvent.TrackSubscribed, this.handleMediaTracks.trackSubscribed);
-    room.on(
-      RoomEvent.TrackUnpublished,
-      this.handleMediaTracks.trackUnsubscribed,
-    );
-    room.on(
-      RoomEvent.TrackSubscriptionFailed,
-      this.handleMediaTracks.trackSubscriptionFailed,
-    );
+    room.on(RoomEvent.TrackUnpublished, this.handleMediaTracks.trackUnsubscribed);
+    room.on(RoomEvent.TrackSubscriptionFailed, this.handleMediaTracks.trackSubscriptionFailed);
     room.on(RoomEvent.TrackMuted, this.handleMediaTracks.trackMuted);
     room.on(RoomEvent.TrackUnmuted, this.handleMediaTracks.trackUnmuted);
-    room.on(
-      RoomEvent.TrackStreamStateChanged,
-      this.handleMediaTracks.trackStreamStateChanged,
-    );
+    room.on(RoomEvent.TrackStreamStateChanged, this.handleMediaTracks.trackStreamStateChanged);
 
-    // for individual local user events
-    room.localParticipant.on(
-      'connectionQualityChanged',
-      this.localUserConnectionQualityChanged,
-    );
+    this._room = room;
+  }
 
-    return room;
-  };
-
-  private initiateParticipants = async () => {
-    // all other connected Participants
-    this._room.remoteParticipants.forEach((participant) => {
-      participant.getTrackPublications().forEach((track) => {
-        if (track.isSubscribed) {
-          if (
-            track.source === Track.Source.ScreenShare ||
-            track.source === Track.Source.ScreenShareAudio
-          ) {
-            store.dispatch(
-              updateParticipant({
-                id: participant.identity,
-                changes: {
-                  screenShareTrack: 1,
-                },
-              }),
-            );
-            this.addScreenShareTrack(
-              participant.identity,
-              track as RemoteTrackPublication,
-            );
-          } else if (track.source === Track.Source.Camera) {
-            this.addVideoSubscriber(participant);
-          }
-        }
-      });
+  public registerExistingTracksForParticipant(participant: RemoteParticipant) {
+    // route through HandleMediaTracks so permission gates
+    // (e.g. _shouldAddWebcam) apply consistently
+    participant.getTrackPublications().forEach((track) => {
+      if (track.isSubscribed) {
+        this.handleMediaTracks.processExistingTrack(track as RemoteTrackPublication, participant);
+      }
     });
-  };
+  }
+
+  public registerAllExistingTracks() {
+    this._room.remoteParticipants.forEach((participant) => {
+      this.registerExistingTracksForParticipant(participant);
+    });
+  }
+
+  private closeLocalTracks() {
+    this._room.localParticipant.getTrackPublications().forEach((track) => {
+      if (track.videoTrack) {
+        track.videoTrack.stop();
+      } else if (track.audioTrack) {
+        track.audioTrack.stop();
+      }
+    });
+  }
 
   public async disconnectRoom(normalDisconnect: boolean) {
     if (this._room.state === ConnectionState.Connected) {
       this.wasNormalDisconnected = normalDisconnect;
+      this.closeLocalTracks();
       await this._room.disconnect(true);
     }
   }
@@ -288,6 +378,19 @@ export default class ConnectLivekit
   }
 
   private onDisconnected = (reason?: DisconnectReason) => {
+    window.removeEventListener('beforeunload', this.onBeforeUnload);
+    this.connectionQualityMonitor.stop();
+    this.adaptiveMediaController.dispose();
+    // Hybrid mode: tear down native publisher on disconnect (beforeunload fallback removed above)
+    teardownNativePublisher();
+
+    // Clear any running timer on disconnect
+    if (this.fallbackTimer) {
+      clearTimeout(this.fallbackTimer);
+      this.fallbackTimer = null;
+    }
+    this.hasAttemptedSilentFallback = false;
+
     if (typeof this.toastIdConnecting !== 'undefined') {
       toast.dismiss(this.toastIdConnecting);
     }
@@ -296,6 +399,7 @@ export default class ConnectLivekit
       // no need to show any message
       return;
     }
+    this.closeLocalTracks();
 
     this._errorState({
       title: i18n.t('notifications.room-disconnected-title'),
@@ -303,260 +407,184 @@ export default class ConnectLivekit
     });
   };
 
-  private getDisconnectErrorReasonText = (reason?: DisconnectReason) => {
-    let msg = i18n.t('notifications.room-disconnected-unknown', {
-      code: 'UNKNOWN_REASON',
+  private getDisconnectErrorReasonText(reason?: DisconnectReason) {
+    let msg = i18n.t('notifications.room-disconnected-default', {
+      reason: reason ? reason.toString() : 'UNKNOWN_REASON',
     });
 
     switch (reason) {
       case DisconnectReason.CLIENT_INITIATED:
-        msg = i18n.t('notifications.room-disconnected-client-initiated', {
-          code: 'CLIENT_INITIATED',
-        });
+        msg = i18n.t('notifications.room-disconnected-client-initiated');
         break;
       case DisconnectReason.DUPLICATE_IDENTITY:
         msg = i18n.t('notifications.room-disconnected-duplicate-entry');
         break;
       case DisconnectReason.SERVER_SHUTDOWN:
-        msg = i18n.t('notifications.room-disconnected-server-shutdown', {
-          code: 'SERVER_SHUTDOWN',
-        });
+        msg = i18n.t('notifications.room-disconnected-server-shutdown');
         break;
       case DisconnectReason.PARTICIPANT_REMOVED:
-        msg = i18n.t('notifications.room-disconnected-participant-removed', {
-          code: 'PARTICIPANT_REMOVED',
-        });
+        msg = i18n.t('notifications.room-disconnected-participant-removed');
         break;
       case DisconnectReason.ROOM_DELETED:
-        msg = i18n.t('notifications.room-disconnected-room-ended', {
-          code: 'ROOM_ENDED',
-        });
+        msg = i18n.t('notifications.room-disconnected-room-ended');
         break;
       case DisconnectReason.STATE_MISMATCH:
-        msg = i18n.t('notifications.room-disconnected-state-mismatch', {
-          code: 'STATE_MISMATCH',
-        });
+        msg = i18n.t('notifications.room-disconnected-state-mismatch');
         break;
     }
 
     return msg;
-  };
+  }
 
   private mediaDevicesError = (error: Error) => {
     // to do
     console.error(error);
   };
 
-  private async localUserConnectionQualityChanged(
-    connectionQuality: ConnectionQuality,
-  ) {
-    store.dispatch(
-      updateParticipant({
-        id: this.localUserId,
-        changes: {
-          connectionQuality: connectionQuality,
-        },
-      }),
-    );
-
-    if (
-      connectionQuality === ConnectionQuality.Poor ||
-      connectionQuality === ConnectionQuality.Lost
-    ) {
-      let msg = i18n.t('notifications.your-connection-quality-not-good');
-      if (connectionQuality === ConnectionQuality.Lost) {
-        msg = i18n.t('notifications.your-connection-quality-lost');
-      }
+  private checkConnectionQualityForFallback = async (stats: QualityStats) => {
+    // For local UI - show the overall experience & update participant list
+    if (this.lastDispatchedOverallQuality !== stats.overallQuality) {
+      this.lastDispatchedOverallQuality = stats.overallQuality;
+      store.dispatch(updateOverallConnectionQuality(stats.overallQuality));
       store.dispatch(
-        addUserNotification({
-          message: msg,
-          typeOption: 'error',
+        updateParticipant({
+          id: toPlugNmeetUserId(this.localUserId),
+          changes: {
+            connectionQuality: stats.overallQuality,
+          },
         }),
       );
     }
 
-    const conn = getNatsConn();
-    if (conn) {
-      conn.sendAnalyticsData(
-        AnalyticsEvents.ANALYTICS_EVENT_USER_CONNECTION_QUALITY,
-        AnalyticsEventType.USER,
-        connectionQuality.toString(),
+    // For broadcasting - only send our own connection's quality
+    const qualityChanged = this.lastReportedConnectionQuality !== stats.uploadQuality;
+    if (qualityChanged) {
+      this.lastReportedConnectionQuality = stats.uploadQuality;
+
+      const conn = getNatsConn();
+      if (conn) {
+        conn.sendAnalyticsData(
+          AnalyticsEvents.ANALYTICS_EVENT_USER_CONNECTION_QUALITY,
+          AnalyticsEventType.USER,
+          stats.uploadQuality,
+        );
+
+        void conn.sendDataMessage(
+          DataMsgBodyType.USER_CONNECTION_QUALITY_CHANGE,
+          stats.uploadQuality,
+        );
+      }
+    }
+
+    this.adaptiveMediaController.evaluate(stats);
+
+    if (!this.serverInfo?.turnCredentials?.fallbackTurn || isFirefoxMobile()) {
+      return;
+    }
+
+    if (this.hasAttemptedSilentFallback) {
+      return;
+    }
+
+    if (stats.isMyConnectionPoor) {
+      if (this.serverInfo?.turnCredentials?.fallbackOnFlapping?.enabled) {
+        this.handleFallbackOnFlapping();
+      } else {
+        this.handleTimerBasedFallback(stats.uploadQuality);
+      }
+      return;
+    }
+
+    if (this.fallbackTimer) {
+      console.log('Connection has recovered. Cancelling fallback timer.');
+      clearTimeout(this.fallbackTimer);
+      this.fallbackTimer = null;
+    }
+  };
+
+  private handleFallbackOnFlapping = () => {
+    const fallbackOnFlapping = this.serverInfo?.turnCredentials?.fallbackOnFlapping;
+
+    if (!fallbackOnFlapping?.enabled) {
+      return;
+    }
+
+    const maxPoorConnCount = fallbackOnFlapping.maxPoorConnCount ?? 3;
+    const checkDuration = (fallbackOnFlapping.checkDurationInSec ?? 120) * 1000;
+
+    const now = Date.now();
+
+    this.poorConnectionTimestamps.push(now);
+
+    this.poorConnectionTimestamps = this.poorConnectionTimestamps.filter(
+      (timestamp) => now - timestamp <= checkDuration,
+    );
+
+    if (this.poorConnectionTimestamps.length >= maxPoorConnCount) {
+      console.warn(
+        `Connection has been unstable ${this.poorConnectionTimestamps.length} times in the last ${
+          checkDuration / 1000
+        }s. Executing fallback.`,
       );
-      conn.sendDataMessage(
-        DataMsgBodyType.USER_CONNECTION_QUALITY_CHANGE,
-        connectionQuality,
+
+      this.poorConnectionTimestamps = [];
+      this.executeSilentRelayFallback();
+    }
+  };
+
+  private handleTimerBasedFallback = (connectionQuality: PnmConnectionQuality) => {
+    if (this.fallbackTimer) {
+      return;
+    }
+
+    const fallbackDuration =
+      Number(this.serverInfo?.turnCredentials?.fallbackTimerDuration) || FALLBACK_TIMER_DURATION;
+
+    console.log(
+      `Connection is unstable (${connectionQuality}). Starting ${
+        fallbackDuration / 1000
+      }s fallback timer.`,
+    );
+
+    this.fallbackTimer = setTimeout(() => {
+      this.fallbackTimer = null;
+
+      if (this.hasAttemptedSilentFallback) {
+        return;
+      }
+
+      console.warn(
+        `Connection has remained unstable for ${
+          fallbackDuration / 1000
+        }s. Executing fallback as a final measure.`,
       );
-    }
-  }
 
-  public addScreenShareTrack = (
-    userId: string,
-    track: LocalTrackPublication | RemoteTrackPublication,
-  ) => {
-    const existUser = participantsSelector.selectById(store.getState(), userId);
-    if (!existUser || !existUser.isOnline) {
-      return;
-    }
-
-    const tracks: Array<LocalTrackPublication | RemoteTrackPublication> = [];
-    if (this._screenShareTracksMap.has(userId)) {
-      const oldTracks = this._screenShareTracksMap.get(userId);
-      if (oldTracks && oldTracks.length) {
-        tracks.push(...oldTracks);
-      }
-    }
-    tracks.push(track);
-    this._screenShareTracksMap.set(userId, tracks);
-    this.syncScreenShareTracks(userId);
+      this.executeSilentRelayFallback();
+    }, fallbackDuration);
   };
 
-  public removeScreenShareTrack = (userId: string) => {
-    this._screenShareTracksMap.delete(userId);
-    this.syncScreenShareTracks(userId);
-  };
+  public addScreenShareTrack: typeof ParticipantMediaManager.prototype.addScreenShareTrack = (
+    userId,
+    track,
+  ) => this.participantMediaManager.addScreenShareTrack(userId, track);
 
-  public syncScreenShareTracks(userId: string) {
-    let payload: IScreenSharing = {
-      isActive: false,
-      sharedBy: '',
-    };
+  public removeScreenShareTrack: typeof ParticipantMediaManager.prototype.removeScreenShareTrack = (
+    userId,
+  ) => this.participantMediaManager.removeScreenShareTrack(userId);
 
-    // notify about status
-    if (this._screenShareTracksMap.size) {
-      payload = {
-        isActive: true,
-        sharedBy: userId,
-      };
-      this.emit(CurrentConnectionEvents.ScreenShareStatus, true);
-    } else {
-      this.emit(CurrentConnectionEvents.ScreenShareStatus, false);
-    }
+  public addAudioSubscriber: typeof ParticipantMediaManager.prototype.addAudioSubscriber = (
+    participant,
+  ) => this.participantMediaManager.addAudioSubscriber(participant);
 
-    // emit a new tracks map
-    const screenShareTracks = new Map(this._screenShareTracksMap) as any;
-    this.emit(CurrentConnectionEvents.ScreenShareTracks, screenShareTracks);
-    store.dispatch(updateScreenSharing(payload));
-  }
+  public removeAudioSubscriber: typeof ParticipantMediaManager.prototype.removeAudioSubscriber = (
+    userId,
+  ) => this.participantMediaManager.removeAudioSubscriber(userId);
 
-  public addAudioSubscriber(
-    participant: Participant | LocalParticipant | RemoteParticipant,
-  ) {
-    if (!participant.audioTrackPublications.size) {
-      return;
-    }
-    const existUser = participantsSelector.selectById(
-      store.getState(),
-      participant.identity,
-    );
-    if (!existUser || !existUser.isOnline) {
-      return;
-    }
-    // we don't want to add local audio here.
-    if (participant.identity === this._room.localParticipant.identity) {
-      return;
-    }
+  public addVideoSubscriber: typeof ParticipantMediaManager.prototype.addVideoSubscriber = (
+    participant,
+  ) => this.participantMediaManager.addVideoSubscriber(participant);
 
-    this._audioSubscribersMap.set(
-      participant.identity,
-      participant as RemoteParticipant,
-    );
-    this.syncAudioSubscribers();
-  }
-
-  public removeAudioSubscriber(userId: string) {
-    if (!this._audioSubscribersMap.has(userId)) {
-      return;
-    }
-
-    this._audioSubscribersMap.delete(userId);
-    this.syncAudioSubscribers();
-  }
-
-  private syncAudioSubscribers = () => {
-    const audioSubscribers = new Map(this._audioSubscribersMap) as any;
-    this.emit(CurrentConnectionEvents.AudioSubscribers, audioSubscribers);
-    // update session reducer
-    store.dispatch(updateTotalAudioSubscribers(audioSubscribers.size));
-  };
-
-  public addVideoSubscriber(
-    participant: Participant | LocalParticipant | RemoteParticipant,
-  ) {
-    if (!participant.videoTrackPublications.size) {
-      return;
-    }
-    const existUser = participantsSelector.selectById(
-      store.getState(),
-      participant.identity,
-    );
-    if (!existUser || !existUser.isOnline) {
-      return;
-    }
-
-    this._videoSubscribersMap.set(participant.identity, participant);
-    this.syncVideoSubscribers();
-  }
-
-  public removeVideoSubscriber(userId: string) {
-    if (!this._videoSubscribersMap.has(userId)) {
-      return;
-    }
-
-    this._videoSubscribersMap.delete(userId);
-    this.syncVideoSubscribers();
-  }
-
-  public syncVideoSubscribers = () => {
-    // update session reducer
-    store.dispatch(updateTotalVideoSubscribers(this._videoSubscribersMap.size));
-
-    if (this._videoSubscribersMap.size) {
-      this.emit(CurrentConnectionEvents.VideoStatus, true);
-    } else {
-      this.emit(CurrentConnectionEvents.VideoStatus, false);
-    }
-
-    if (this._videoSubscribersMap.size <= 1) {
-      const subscribers = new Map(this._videoSubscribersMap) as any;
-      this.emit(CurrentConnectionEvents.VideoSubscribers, subscribers);
-      return;
-    }
-
-    const activeSpeakers = activeSpeakersSelector.selectAll(store.getState());
-    const mediaSubscribersToArray = Array.from(this._videoSubscribersMap);
-    mediaSubscribersToArray.sort((a, b) => {
-      const aPrt = a[1];
-      const bPart = b[1];
-
-      const aSpeaker = activeSpeakers.find((s) => s.userId === aPrt.identity);
-      const bSpeaker = activeSpeakers.find((s) => s.userId === bPart.identity);
-
-      const aIsSpeaking = aSpeaker?.isSpeaking ?? false;
-      const bIsSpeaking = bSpeaker?.isSpeaking ?? false;
-
-      // speaker goes first
-      if (aIsSpeaking !== bIsSpeaking) {
-        return aIsSpeaking ? -1 : 1;
-      }
-
-      // last active speaker first
-      const aLastSpoke = aSpeaker?.lastSpokeAt ?? 0;
-      const bLastSpoke = bSpeaker?.lastSpokeAt ?? 0;
-      if (aLastSpoke !== bLastSpoke) {
-        return bLastSpoke - aLastSpoke;
-      }
-
-      // then LiveKit's last active speaker
-      if (aPrt.lastSpokeAt !== bPart.lastSpokeAt) {
-        const aLast = aPrt.lastSpokeAt?.getTime() ?? 0;
-        const bLast = bPart.lastSpokeAt?.getTime() ?? 0;
-        return bLast - aLast;
-      }
-
-      return (aPrt.joinedAt?.getTime() ?? 0) - (bPart.joinedAt?.getTime() ?? 0);
-    });
-
-    const subscribers = new Map(mediaSubscribersToArray) as any;
-    this.emit(CurrentConnectionEvents.VideoSubscribers, subscribers);
-  };
+  public removeVideoSubscriber: typeof ParticipantMediaManager.prototype.removeVideoSubscriber = (
+    userId,
+  ) => this.participantMediaManager.removeVideoSubscriber(userId);
 }

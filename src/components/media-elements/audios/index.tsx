@@ -1,32 +1,24 @@
 import React, { ReactElement, useEffect, useMemo, useState } from 'react';
-import {
-  LocalParticipant,
-  RemoteAudioTrack,
-  RemoteParticipant,
-} from 'livekit-client';
+import { LocalParticipant, RemoteAudioTrack, RemoteParticipant } from 'livekit-client';
 
 import AudioElm from './audio';
 import { CurrentConnectionEvents } from '../../../helpers/livekit/types';
 import { getMediaServerConn } from '../../../helpers/livekit/utils';
+import { store } from '../../../store';
 
 const AudioElements = () => {
   const [audioSubscribers, setAudioSubscribers] =
     useState<Map<string, RemoteParticipant | LocalParticipant>>();
   const currentConnection = getMediaServerConn();
+  const localUserId = store.getState().session.currentUser?.userId;
 
   useEffect(() => {
     if (currentConnection.audioSubscribersMap.size) {
       setAudioSubscribers(currentConnection.audioSubscribersMap);
     }
-    currentConnection.on(
-      CurrentConnectionEvents.AudioSubscribers,
-      setAudioSubscribers,
-    );
+    currentConnection.on(CurrentConnectionEvents.AudioSubscribers, setAudioSubscribers);
     return () => {
-      currentConnection.off(
-        CurrentConnectionEvents.AudioSubscribers,
-        setAudioSubscribers,
-      );
+      currentConnection.off(CurrentConnectionEvents.AudioSubscribers, setAudioSubscribers);
     };
   }, [currentConnection]);
 
@@ -35,22 +27,23 @@ const AudioElements = () => {
       return null;
     }
     const elms: Array<ReactElement> = [];
-    audioSubscribers.forEach((participant) => {
-      participant.audioTrackPublications.forEach((track) => {
+    for (const [userId, participant] of audioSubscribers) {
+      for (const track of participant.audioTrackPublications.values()) {
         if (track.audioTrack && track.audioTrack instanceof RemoteAudioTrack) {
           elms.push(
             <AudioElm
-              userId={participant.identity}
+              userId={userId}
               audioTrack={track.audioTrack}
+              isLocalUser={userId === localUserId}
               key={track.trackSid}
             />,
           );
         }
-      });
-    });
+      }
+    }
 
     return elms;
-  }, [audioSubscribers]);
+  }, [audioSubscribers, localUserId]);
 };
 
 export default AudioElements;

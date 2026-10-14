@@ -1,34 +1,29 @@
 import { DataChannelMessage, DataMsgBodyType } from 'plugnmeet-protocol-js';
 
 import { store } from '../../store';
+import { getWhiteboardController } from '../../components/whiteboard/collab';
 import {
   setWhiteboardCurrentPage,
   updateCurrentOfficeFilePages,
   updateCurrentWhiteboardOfficeFileId,
-  updateExcalidrawElements,
   updateMouseAppStateChanges,
-  updateMousePointerLocation,
 } from '../../store/slices/whiteboard';
-import { decryptMessage } from '../libs/cryptoMessages';
-import { addUserNotification } from '../../store/slices/roomSettingsSlice';
 
 export default class HandleWhiteboard {
-  private _isEnabledE2EE: boolean | undefined = undefined;
-
   public handleWhiteboardMsg = async (payload: DataChannelMessage) => {
-    let finalMsg: string | undefined;
-
     switch (payload.type) {
       case DataMsgBodyType.SCENE_UPDATE:
-        finalMsg = await this.handleDecryption(payload.message);
-        if (typeof finalMsg !== 'undefined') {
-          store.dispatch(updateExcalidrawElements(finalMsg));
-        }
-        break;
+      case DataMsgBodyType.WHITEBOARD_SYNC_REQUEST:
+      case DataMsgBodyType.WHITEBOARD_SYNC_RESPONSE:
       case DataMsgBodyType.POINTER_UPDATE:
-        finalMsg = await this.handleDecryption(payload.message);
-        if (typeof finalMsg !== 'undefined') {
-          store.dispatch(updateMousePointerLocation(finalMsg));
+        if (payload.binMessage && payload.binMessage.length > 0) {
+          getWhiteboardController().handleMessage(
+            payload.type,
+            payload.binMessage,
+            payload.fromUserId,
+            payload.id,
+            payload.message,
+          );
         }
         break;
       case DataMsgBodyType.PAGE_CHANGE:
@@ -38,7 +33,11 @@ export default class HandleWhiteboard {
         break;
       case DataMsgBodyType.FILE_CHANGE:
         if (!this.isCurrentUserPresenter()) {
-          store.dispatch(updateCurrentWhiteboardOfficeFileId(payload.message));
+          const { fileId, page } = JSON.parse(payload.message) as {
+            fileId: string;
+            page: number;
+          };
+          store.dispatch(updateCurrentWhiteboardOfficeFileId({ fileId, page }));
         }
         break;
       case DataMsgBodyType.UPDATE_CURRENT_OFFICE_FILE_PAGES:
@@ -48,41 +47,11 @@ export default class HandleWhiteboard {
         break;
       case DataMsgBodyType.WHITEBOARD_APP_STATE_CHANGE:
         if (!this.isCurrentUserPresenter()) {
-          store.dispatch(
-            updateMouseAppStateChanges(JSON.parse(payload.message)),
-          );
+          store.dispatch(updateMouseAppStateChanges(JSON.parse(payload.message)));
         }
         break;
     }
   };
-
-  private async handleDecryption(msg: string) {
-    if (typeof this._isEnabledE2EE === 'undefined') {
-      const e2ee =
-        store.getState().session.currentRoom.metadata?.roomFeatures
-          ?.endToEndEncryptionFeatures;
-      this._isEnabledE2EE = !!(
-        e2ee &&
-        e2ee.isEnabled &&
-        e2ee.includedWhiteboard
-      );
-    }
-    if (this._isEnabledE2EE) {
-      try {
-        return await decryptMessage(msg);
-      } catch (e: any) {
-        store.dispatch(
-          addUserNotification({
-            message: 'Decryption error: ' + e.message,
-            typeOption: 'error',
-          }),
-        );
-        console.error('Decryption error:' + e.message);
-        return undefined;
-      }
-    }
-    return msg;
-  }
 
   private isCurrentUserPresenter() {
     return store.getState().session.currentUser?.metadata?.isPresenter;

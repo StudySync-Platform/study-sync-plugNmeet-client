@@ -5,6 +5,9 @@ import { Theme } from '@excalidraw/excalidraw/element/types';
 import {
   ColumnCameraPosition,
   ColumnCameraWidth,
+  DeviceSessionStorageKeys,
+  IMaxNumDisplayWebcams,
+  IMediaDegradation,
   IMediaDevice,
   InitiatePrivateChat,
   IRoomSettings,
@@ -12,7 +15,9 @@ import {
   UserNotification,
   VideoObjectFit,
 } from './interfaces/roomSettings';
-import { AzureTokenInfo } from '../../components/speech-to-text-service/helpers/apiConnections';
+import { AzureTokenInfo } from '../../components/translation-transcription/helpers/apiConnections';
+import { DB_STORE_NAMES, idbStore } from '../../helpers/libs/idb';
+import { BackgroundConfig } from '../../helpers/libs/TrackProcessor';
 
 const initialState: IRoomSettings = {
   isShowRoomSettingsModal: false,
@@ -23,9 +28,17 @@ const initialState: IRoomSettings = {
   videoDevices: [],
   selectedAudioDevice: '',
   selectedVideoDevice: '',
+  virtualBackground: { type: 'none' },
+
   playAudioNotification: false,
   activateWebcamsView: true,
   activeScreenSharingView: true,
+  mediaDegradation: {
+    incomingWebcamPaused: false,
+    incomingScreensharePaused: false,
+    outgoingCameraPaused: false,
+    autoRestoreSuspended: false,
+  },
   allowPlayAudioNotification: true,
   roomAudioVolume: 1,
   roomScreenShareAudioVolume: 1,
@@ -40,6 +53,7 @@ const initialState: IRoomSettings = {
     userId: '',
   },
   unreadMsgFrom: [],
+  selectedChatTransLang: '',
 
   columnCameraWidth: ColumnCameraWidth.FULL_WIDTH,
   columnCameraPosition: ColumnCameraPosition.LEFT,
@@ -48,6 +62,13 @@ const initialState: IRoomSettings = {
   isPNMWindowTabVisible: true,
   focusActiveSpeakerWebcam: true,
   userNotifications: [],
+  isSidePanelOpened: false,
+  hasWebcamPages: false,
+  maxNumDisplayWebcams: {
+    desktop: 24,
+    tablet: 9,
+    mobile: 6,
+  },
 };
 
 const roomSettingsSlice = createSlice({
@@ -57,10 +78,7 @@ const roomSettingsSlice = createSlice({
     updateShowRoomSettingsModal: (state, action: PayloadAction<boolean>) => {
       state.isShowRoomSettingsModal = action.payload;
     },
-    updateShowKeyboardShortcutsModal: (
-      state,
-      action: PayloadAction<boolean>,
-    ) => {
+    updateShowKeyboardShortcutsModal: (state, action: PayloadAction<boolean>) => {
       state.isShowKeyboardShortcuts = action.payload;
     },
     updateIsNatsServerConnected: (state, action: PayloadAction<boolean>) => {
@@ -74,9 +92,30 @@ const roomSettingsSlice = createSlice({
     },
     updateSelectedAudioDevice: (state, action: PayloadAction<string>) => {
       state.selectedAudioDevice = action.payload;
+      if (action.payload) {
+        sessionStorage.setItem(DeviceSessionStorageKeys.AUDIO_DEVICE, action.payload);
+      } else {
+        sessionStorage.removeItem(DeviceSessionStorageKeys.AUDIO_DEVICE);
+      }
     },
     updateSelectedVideoDevice: (state, action: PayloadAction<string>) => {
       state.selectedVideoDevice = action.payload;
+      if (action.payload) {
+        sessionStorage.setItem(DeviceSessionStorageKeys.VIDEO_DEVICE, action.payload);
+      } else {
+        sessionStorage.removeItem(DeviceSessionStorageKeys.VIDEO_DEVICE);
+      }
+    },
+    updateVirtualBackground: (state, action: PayloadAction<BackgroundConfig>) => {
+      state.virtualBackground = action.payload;
+      if (action.payload.type === 'none') {
+        sessionStorage.removeItem(DeviceSessionStorageKeys.VIRTUAL_BACKGROUND);
+      } else {
+        sessionStorage.setItem(
+          DeviceSessionStorageKeys.VIRTUAL_BACKGROUND,
+          JSON.stringify(action.payload),
+        );
+      }
     },
     updatePlayAudioNotification: (state, action: PayloadAction<boolean>) => {
       state.playAudioNotification = action.payload;
@@ -87,19 +126,19 @@ const roomSettingsSlice = createSlice({
     updateActiveScreenSharingView: (state, action: PayloadAction<boolean>) => {
       state.activeScreenSharingView = action.payload;
     },
-    updateAllowPlayAudioNotification: (
-      state,
-      action: PayloadAction<boolean>,
-    ) => {
+    updateMediaDegradation: (state, action: PayloadAction<Partial<IMediaDegradation>>) => {
+      state.mediaDegradation = {
+        ...state.mediaDegradation,
+        ...action.payload,
+      };
+    },
+    updateAllowPlayAudioNotification: (state, action: PayloadAction<boolean>) => {
       state.allowPlayAudioNotification = action.payload;
     },
     updateRoomAudioVolume: (state, action: PayloadAction<number>) => {
       state.roomAudioVolume = action.payload;
     },
-    updateRoomScreenShareAudioVolume: (
-      state,
-      action: PayloadAction<number>,
-    ) => {
+    updateRoomScreenShareAudioVolume: (state, action: PayloadAction<number>) => {
       state.roomScreenShareAudioVolume = action.payload;
     },
     updateRoomVideoQuality: (state, action: PayloadAction<VideoQuality>) => {
@@ -117,16 +156,10 @@ const roomSettingsSlice = createSlice({
     updateSelectedChatOption: (state, action: PayloadAction<string>) => {
       state.selectedChatOption = action.payload;
     },
-    updateInitiatePrivateChat: (
-      state,
-      action: PayloadAction<InitiatePrivateChat>,
-    ) => {
+    updateInitiatePrivateChat: (state, action: PayloadAction<InitiatePrivateChat>) => {
       state.initiatePrivateChat = action.payload;
     },
-    updateUnreadMsgFrom: (
-      state,
-      action: PayloadAction<UnreadMsgFromPayload>,
-    ) => {
+    updateUnreadMsgFrom: (state, action: PayloadAction<UnreadMsgFromPayload>) => {
       const tmp = [...state.unreadMsgFrom];
       if (action.payload.task === 'ADD') {
         const exist = tmp.filter((id) => id === action.payload.id);
@@ -138,16 +171,10 @@ const roomSettingsSlice = createSlice({
         state.unreadMsgFrom = tmp.filter((id) => id !== action.payload.id);
       }
     },
-    updateColumnCameraWidth: (
-      state,
-      action: PayloadAction<ColumnCameraWidth>,
-    ) => {
+    updateColumnCameraWidth: (state, action: PayloadAction<ColumnCameraWidth>) => {
       state.columnCameraWidth = action.payload;
     },
-    updateColumnCameraPosition: (
-      state,
-      action: PayloadAction<ColumnCameraPosition>,
-    ) => {
+    updateColumnCameraPosition: (state, action: PayloadAction<ColumnCameraPosition>) => {
       state.columnCameraPosition = action.payload;
     },
     toggleHeaderVisibility: (state) => {
@@ -181,6 +208,32 @@ const roomSettingsSlice = createSlice({
         action.payload.created = Date.now();
       }
       state.userNotifications.push(action.payload);
+      if (action.payload.disablePersistentStorage) {
+        return;
+      }
+      void idbStore(
+        DB_STORE_NAMES.USER_NOTIFICATIONS,
+        action.payload.created.toString(),
+        action.payload,
+      );
+    },
+    setAllUserNotifications: (state, action: PayloadAction<UserNotification[]>) => {
+      state.userNotifications = action.payload;
+    },
+    updateIsSidePanelOpened: (state, action: PayloadAction<boolean>) => {
+      state.isSidePanelOpened = action.payload;
+    },
+    updateSelectedChatTransLang: (state, action: PayloadAction<string>) => {
+      state.selectedChatTransLang = action.payload;
+    },
+    updateHasWebcamPages: (state, action: PayloadAction<boolean>) => {
+      state.hasWebcamPages = action.payload;
+    },
+    updateMaxNumDisplayWebcams: (state, action: PayloadAction<Partial<IMaxNumDisplayWebcams>>) => {
+      state.maxNumDisplayWebcams = {
+        ...state.maxNumDisplayWebcams,
+        ...action.payload,
+      };
     },
   },
 });
@@ -190,10 +243,12 @@ export const {
   addVideoDevices,
   updateSelectedAudioDevice,
   updateSelectedVideoDevice,
+  updateVirtualBackground,
   updatePlayAudioNotification,
   updateShowRoomSettingsModal,
   updateActivateWebcamsView,
   updateActiveScreenSharingView,
+  updateMediaDegradation,
   updateAllowPlayAudioNotification,
   updateShowKeyboardShortcutsModal,
   updateRoomAudioVolume,
@@ -217,6 +272,11 @@ export const {
   updateFocusActiveSpeakerWebcam,
   addSelfInsertedE2EESecretKey,
   addUserNotification,
+  setAllUserNotifications,
+  updateIsSidePanelOpened,
+  updateSelectedChatTransLang,
+  updateHasWebcamPages,
+  updateMaxNumDisplayWebcams,
 } = roomSettingsSlice.actions;
 
 export default roomSettingsSlice.reducer;

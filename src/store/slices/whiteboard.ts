@@ -1,22 +1,17 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
 import {
-  IRequestWhiteboardData,
   IWhiteboardAppState,
   IWhiteboardOfficeFile,
   IWhiteboardSlice,
+  WhiteboardDataAsDonorData,
 } from './interfaces/whiteboard';
+import { isArray } from 'es-toolkit/compat';
 
 const initialState: IWhiteboardSlice = {
   totalPages: 10,
   currentPage: 1,
-  excalidrawElements: '',
-  mousePointerLocation: '',
   whiteboardAppState: null,
-  requestedWhiteboardData: {
-    requested: false,
-    sendTo: '',
-  },
   currentWhiteboardOfficeFileId: 'default',
   currentOfficeFilePages: '',
   whiteboardUploadedOfficeFiles: [
@@ -29,48 +24,27 @@ const initialState: IWhiteboardSlice = {
       pageFiles: '',
     },
   ],
-  refreshWhiteboard: 0,
-  allExcalidrawElements: '',
+  refreshWhiteboardSignal: 0,
+  refreshWhiteboardFilesListSignal: 0,
 };
 
 const whiteboardSlice = createSlice({
   name: 'whiteboard',
   initialState,
   reducers: {
-    updateExcalidrawElements: (state, action: PayloadAction<string>) => {
-      state.excalidrawElements = action.payload;
-    },
-    updateMousePointerLocation: (state, action: PayloadAction<string>) => {
-      state.mousePointerLocation = action.payload;
-    },
-    updateMouseAppStateChanges: (
-      state,
-      action: PayloadAction<IWhiteboardAppState>,
-    ) => {
+    updateMouseAppStateChanges: (state, action: PayloadAction<IWhiteboardAppState>) => {
       state.whiteboardAppState = action.payload;
-    },
-    addAllExcalidrawElements: (state, action: PayloadAction<string>) => {
-      state.allExcalidrawElements = action.payload;
-    },
-    updateRequestedWhiteboardData: (
-      state,
-      action: PayloadAction<IRequestWhiteboardData>,
-    ) => {
-      state.requestedWhiteboardData = action.payload;
     },
     setWhiteboardCurrentPage: (state, action: PayloadAction<number>) => {
       state.currentPage = action.payload;
-      // When the page changes, clear any existing elements to make way for the new content.
-      state.excalidrawElements = '';
-      state.allExcalidrawElements = '';
     },
     updateCurrentWhiteboardOfficeFileId: (
       state,
-      action: PayloadAction<string>,
+      action: PayloadAction<{ fileId: string; page: number }>,
     ) => {
-      const file = state.whiteboardUploadedOfficeFiles.find(
-        (f) => f.fileId === action.payload,
-      );
+      const { fileId, page } = action.payload;
+
+      const file = state.whiteboardUploadedOfficeFiles.find((f) => f.fileId === fileId);
       if (file) {
         state.totalPages = file.totalPages;
         state.currentOfficeFilePages = file.pageFiles;
@@ -79,45 +53,79 @@ const whiteboardSlice = createSlice({
         // The page data will be synced from the presenter.
         state.currentOfficeFilePages = '';
       }
-      // This state update is crucial for triggering a refresh for all clients.
-      state.currentWhiteboardOfficeFileId = action.payload;
-      // Reset to the first page whenever a new file is selected.
-      state.currentPage = 1;
-      // When the file changes, clear any existing elements to make way for the new content.
-      state.excalidrawElements = '';
-      state.allExcalidrawElements = '';
+
+      state.currentWhiteboardOfficeFileId = fileId;
+      state.currentPage = page;
     },
     updateCurrentOfficeFilePages: (state, action: PayloadAction<string>) => {
       state.currentOfficeFilePages = action.payload;
+      // Non-presenters usually don't have the office file in their local list,
+      // so `updateCurrentWhiteboardOfficeFileId` can't set `totalPages` for them.
+      // The presenter's page list is authoritative: derive the count from it so
+      // a later presenter take-over doesn't inherit a stale value.
+      if (action.payload !== '') {
+        try {
+          const pages = JSON.parse(action.payload);
+          if (pages && isArray(pages) && pages.length > 0) {
+            state.totalPages = pages.length;
+          }
+        } catch {
+          // keep the previous totalPages on a malformed payload
+        }
+      }
     },
-    addWhiteboardUploadedOfficeFile: (
-      state,
-      action: PayloadAction<IWhiteboardOfficeFile>,
-    ) => {
+    addWhiteboardUploadedOfficeFile: (state, action: PayloadAction<IWhiteboardOfficeFile>) => {
+      if (action.payload.fileId === '' || action.payload.totalPages == 0) {
+        return;
+      }
       const exists = state.whiteboardUploadedOfficeFiles.some(
         (f) => f.fileId === action.payload.fileId,
       );
       if (!exists) {
         state.whiteboardUploadedOfficeFiles.push(action.payload);
       }
+      // If this file is already the active one (registered late, e.g. right
+      // after a presenter take-over), refresh the active view from the
+      // server-provided metadata. Keep an existing page list: it carries the
+      // element ids the previous presenter already placed on the canvas.
+      if (state.currentWhiteboardOfficeFileId === action.payload.fileId) {
+        state.totalPages = action.payload.totalPages;
+        if (state.currentOfficeFilePages === '') {
+          state.currentOfficeFilePages = action.payload.pageFiles;
+        }
+      }
     },
-    doRefreshWhiteboard: (state) => {
-      state.refreshWhiteboard = Date.now();
+    triggerRefreshWhiteboard: (state) => {
+      state.refreshWhiteboardSignal = Date.now();
+    },
+    triggerRefreshWhiteboardFilesListSignal: (state) => {
+      state.refreshWhiteboardFilesListSignal = Date.now();
+    },
+    addWhiteboardDataSentFromDonor: (state, action: PayloadAction<WhiteboardDataAsDonorData>) => {
+      state.currentWhiteboardOfficeFileId = action.payload.currentWhiteboardOfficeFileId;
+      state.currentPage = action.payload.currentPageNumber;
+      state.currentOfficeFilePages = action.payload.currentOfficeFilePages;
+
+      if (action.payload.currentOfficeFilePages !== '') {
+        const pages = JSON.parse(action.payload.currentOfficeFilePages);
+        if (pages && isArray(pages) && pages.length > 0) {
+          state.totalPages = pages.length;
+        }
+      }
+      state.whiteboardAppState = action.payload.appState;
     },
   },
 });
 
 export const {
-  updateExcalidrawElements,
-  updateMousePointerLocation,
   updateMouseAppStateChanges,
-  updateRequestedWhiteboardData,
   setWhiteboardCurrentPage,
   updateCurrentWhiteboardOfficeFileId,
   updateCurrentOfficeFilePages,
   addWhiteboardUploadedOfficeFile,
-  doRefreshWhiteboard,
-  addAllExcalidrawElements,
+  triggerRefreshWhiteboard,
+  triggerRefreshWhiteboardFilesListSignal,
+  addWhiteboardDataSentFromDonor,
 } = whiteboardSlice.actions;
 
 export default whiteboardSlice.reducer;

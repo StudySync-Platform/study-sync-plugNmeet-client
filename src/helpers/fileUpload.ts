@@ -15,7 +15,7 @@ import { store } from '../store';
 import sendAPIRequest from './api/plugNmeetAPI';
 import { addUserNotification } from '../store/slices/roomSettingsSlice';
 import { ISession } from '../store/slices/interfaces/session';
-import { sleep } from './utils';
+import { getConfigValue, sleep } from './utils';
 import ResumableFile = Resumable.ResumableFile;
 
 export const uploadBase64EncodedFile = async (
@@ -77,16 +77,20 @@ let isUploadingFile = false; // Global lock to prevent multiple uploads from the
 class ResumableUploader {
   private readonly resumable: Resumable;
   private toastId: string | number = '';
+  private mergeToastId: string | number = '';
   private fileName = '';
   private readonly args: IResumableUploaderArgs;
   private readonly session: ISession;
+  private uploadedFirstChunk: boolean = false;
 
   constructor(args: IResumableUploaderArgs) {
     this.args = args;
     this.session = store.getState().session;
 
     this.resumable = new Resumable({
-      target: (window as any).PLUG_N_MEET_SERVER_URL + '/api/fileUpload',
+      target:
+        getConfigValue<string>('serverUrl', 'http://localhost:8080', 'PLUG_N_MEET_SERVER_URL') +
+        '/api/fileUpload',
       uploadMethod: 'POST',
       query: {
         roomSid: this.session.currentRoom.sid,
@@ -97,14 +101,33 @@ class ResumableUploader {
       headers: {
         Authorization: this.session.token,
       },
-      prioritizeFirstAndLastChunk: true,
       fileType: this.args.allowedFileTypes,
       // @ts-ignore
-      maxFileSize: this.args.maxFileSize
-        ? Number(this.args.maxFileSize) * 1000000
-        : undefined,
+      maxFileSize: this.args.maxFileSize ? Number(this.args.maxFileSize) * 1000000 : undefined,
       fileTypeErrorCallback: this.onFileTypeError,
       maxFileSizeErrorCallback: this.onMaxFileSizeError,
+      chunkSize: 10 * 1024 * 1024, // 10MB
+      forceChunkSize: true,
+      preprocess: (chunk: any) => {
+        if (this.uploadedFirstChunk) {
+          chunk.preprocessFinished();
+          return chunk;
+        }
+
+        if (chunk.offset === 0) {
+          chunk.preprocessFinished();
+        } else {
+          const check = () => {
+            if (this.uploadedFirstChunk) {
+              chunk.preprocessFinished();
+            } else {
+              setTimeout(check, 1000);
+            }
+          };
+          check();
+        }
+        return chunk;
+      },
     });
 
     this.setupEventListeners();
@@ -127,6 +150,12 @@ class ResumableUploader {
   };
 
   private onFileSuccess = async (file: ResumableFile) => {
+    // clean up previous toast
+    this.cleanUp();
+    // Display loading indicator for merge operation
+    this.mergeToastId = toast.loading(i18n.t('notifications.merging-file'), {
+      type: 'info',
+    });
     await sleep(1000);
 
     const mergeReq = create(UploadedFileMergeReqSchema, {
@@ -148,13 +177,23 @@ class ResumableUploader {
     );
     const res = fromBinary(UploadedFileResSchema, new Uint8Array(r));
 
-    this.cleanUp();
-
     if (res.status && res.filePath && res.fileName) {
+      toast.update(this.mergeToastId, {
+        render: i18n.t('notifications.file-merge-success'),
+        type: 'success',
+        isLoading: false,
+        autoClose: 1000,
+      });
       this.args.onSuccess(res);
     } else {
-      this.args.onError?.(i18n.t(res.msg));
-      toast(i18n.t(res.msg), { type: 'error' });
+      const errorMessage = i18n.t(res.msg || 'notifications.file-merge-failed');
+      toast.update(this.mergeToastId, {
+        render: errorMessage,
+        type: 'error',
+        isLoading: false,
+        autoClose: 3000,
+      });
+      this.args.onError?.(errorMessage);
     }
   };
 
@@ -163,31 +202,38 @@ class ResumableUploader {
     try {
       const res = JSON.parse(message);
       const msg = i18n.t(res.msg);
-      store.dispatch(
-        addUserNotification({ message: msg, typeOption: 'error' }),
-      );
+      store.dispatch(addUserNotification({ message: msg, typeOption: 'error' }));
       this.args.onError?.(msg);
     } catch (e) {
       console.error(e);
       const msg = i18n.t('right-panel.file-upload-default-error');
-      store.dispatch(
-        addUserNotification({ message: msg, typeOption: 'error' }),
-      );
+      store.dispatch(addUserNotification({ message: msg, typeOption: 'error' }));
       this.args.onError?.(msg);
     }
   };
 
   private onUploadStart = () => {
-    this.toastId = toast(
-      i18n.t('right-panel.uploading-file', { fileName: this.fileName }),
-      {
-        closeButton: false,
-        progress: 0,
-      },
-    );
+    this.toastId = toast(i18n.t('right-panel.uploading-file', { fileName: this.fileName }), {
+      closeButton: false,
+      progress: 0,
+      autoClose: false,
+    });
+  };
+
+  private confirmFirstChunkUploaded = (file: any) => {
+    if (this.uploadedFirstChunk || file.chunks.length === 1) {
+      return;
+    }
+    const firstChunk = file.chunks[0];
+    if (firstChunk.status() === 'success') {
+      this.uploadedFirstChunk = true;
+    }
   };
 
   private onFileProgress = (file: ResumableFile) => {
+    // check status of first chunk
+    this.confirmFirstChunkUploaded(file);
+
     const progress = file.progress(false);
     this.args.uploadingProgress?.(Number(progress));
     toast.update(this.toastId, { progress: Number(progress) });
@@ -221,11 +267,9 @@ class ResumableUploader {
 
   public start = () => {
     if (isUploadingFile) {
-      const msg = i18n.t('notifications.please-wait-other-task-to-finish');
+      const msg = i18n.t('notifications.wait-other-uploading-to-finish');
       this.args.onError?.(msg);
-      store.dispatch(
-        addUserNotification({ message: msg, typeOption: 'warning' }),
-      );
+      store.dispatch(addUserNotification({ message: msg, typeOption: 'warning' }));
       return;
     }
     isUploadingFile = true;

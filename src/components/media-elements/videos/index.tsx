@@ -21,9 +21,7 @@ export interface VideoParticipantType {
 
 const VideosComponent = ({ isVertical }: IVideosComponentProps) => {
   const dispatch = useAppDispatch();
-  const pinCamUserId = useAppSelector(
-    (state) => state.roomSettings.pinCamUserId,
-  );
+  const pinCamUserId = useAppSelector((state) => state.roomSettings.pinCamUserId);
   const [videoSubscribers, setVideoSubscribers] =
     useState<Map<string, LocalParticipant | RemoteParticipant>>();
   const currentConnection = getMediaServerConn();
@@ -32,31 +30,22 @@ const VideosComponent = ({ isVertical }: IVideosComponentProps) => {
     if (currentConnection.videoSubscribersMap.size) {
       setVideoSubscribers(currentConnection.videoSubscribersMap as any);
     }
-    currentConnection.on(
-      CurrentConnectionEvents.VideoSubscribers,
-      setVideoSubscribers,
-    );
+    currentConnection.on(CurrentConnectionEvents.VideoSubscribers, setVideoSubscribers);
     return () => {
-      currentConnection.off(
-        CurrentConnectionEvents.VideoSubscribers,
-        setVideoSubscribers,
-      );
+      currentConnection.off(CurrentConnectionEvents.VideoSubscribers, setVideoSubscribers);
     };
   }, [currentConnection]);
 
   const { allParticipants, pinParticipant, totalNumWebcams } = useMemo(() => {
     let totalNumWebcams = 0;
     const localSubscribers: Array<ReactElement<VideoParticipantProps>> = [];
-    let pinSubscribers: ReactElement<VideoParticipantProps> | undefined =
-      undefined;
+    let pinSubscribers: ReactElement<VideoParticipantProps> | undefined = undefined;
     const adminSubscribers: Array<ReactElement<VideoParticipantProps>> = [];
     const otherSubscribers: Array<ReactElement<VideoParticipantProps>> = [];
 
-    const subscribers = videoSubscribers
-      ? Array.from(videoSubscribers.values())
-      : [];
+    const subscribers = videoSubscribers ? Array.from(videoSubscribers.entries()) : [];
 
-    for (const participant of subscribers) {
+    for (const [userId, participant] of subscribers) {
       // we will only take if source from Camera
       const videoTracks = participant.getTrackPublication(Track.Source.Camera);
       if (videoTracks) {
@@ -64,11 +53,8 @@ const VideosComponent = ({ isVertical }: IVideosComponentProps) => {
           displayPinIcon = true,
           displaySwitchCamIcon = true;
 
-        const pp = participantsSelector.selectById(
-          store.getState(),
-          participant.identity,
-        );
-        isAdmin = !!pp?.metadata?.isAdmin;
+        const pp = participantsSelector.selectById(store.getState(), userId);
+        isAdmin = pp?.metadata?.isAdmin;
 
         const participantType: VideoParticipantType = {
           isAdmin,
@@ -80,21 +66,23 @@ const VideosComponent = ({ isVertical }: IVideosComponentProps) => {
           displaySwitchCamIcon = false;
         }
 
-        // for (let i = 0; i < 3; i++) {
+        // for (let i = 0; i < 25; i++) {
         totalNumWebcams++;
         const elm = (
           <VideoParticipant
             key={participant.sid}
             // key={participant.sid + '_' + i}
             participantType={participantType}
+            userId={userId}
             participant={participant}
             displayPinIcon={displayPinIcon}
             displaySwitchCamIcon={displaySwitchCamIcon}
           />
         );
 
-        if (pinCamUserId && participant.identity === pinCamUserId) {
+        if (pinCamUserId && userId === pinCamUserId) {
           pinSubscribers = elm;
+          totalNumWebcams--;
         } else if (isAdmin) {
           adminSubscribers.push(elm);
         } else if (participant instanceof LocalParticipant) {
@@ -106,14 +94,9 @@ const VideosComponent = ({ isVertical }: IVideosComponentProps) => {
       }
     }
 
-    const allParticipants = concat(
-      adminSubscribers,
-      localSubscribers,
-      otherSubscribers,
-    );
+    const allParticipants = concat(adminSubscribers, localSubscribers, otherSubscribers);
 
-    let finalPinParticipant: ReactElement<VideoParticipantProps> | undefined =
-      undefined;
+    let finalPinParticipant: ReactElement<VideoParticipantProps> | undefined = undefined;
     if (totalNumWebcams > 1 && pinSubscribers) {
       // only then we can activate pin cam
       finalPinParticipant = pinSubscribers;

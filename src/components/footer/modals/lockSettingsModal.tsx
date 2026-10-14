@@ -1,10 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 import { useTranslation } from 'react-i18next';
-import {
-  CommonResponseSchema,
-  UpdateUserLockSettingsReqSchema,
-} from 'plugnmeet-protocol-js';
+import { CommonResponseSchema, UpdateUserLockSettingsReqSchema } from 'plugnmeet-protocol-js';
 
 import { store, useAppDispatch, useAppSelector } from '../../../store';
 import { updateShowLockSettingsModal } from '../../../store/slices/bottomIconsActivitySlice';
@@ -72,7 +69,7 @@ const LockSettingsModal = () => {
 
       setIsBusy(false);
     },
-    // oxlint-disable-next-line exhaustive-deps
+    // oxlint-disable-next-line exhaustive-deps, react/memo-dependencies
     [isBusy, t, dispatch],
   );
 
@@ -107,6 +104,11 @@ const LockSettingsModal = () => {
       service: 'sharedNotepad',
     },
     {
+      label: t('footer.modal.lock-reactions'),
+      checked: roomLockSettings?.lockReactions ?? false,
+      service: 'reactions',
+    },
+    {
       label: t('footer.modal.lock-chat'),
       checked: roomLockSettings?.lockChat ?? false,
       service: 'chat',
@@ -129,11 +131,7 @@ const LockSettingsModal = () => {
   ];
 
   return (
-    <Modal
-      show={true}
-      onClose={closeModal}
-      title={t('footer.modal.lock-settings-title')}
-    >
+    <Modal show={true} onClose={closeModal} title={t('footer.modal.lock-settings-title')}>
       {lockOptions.map((option, i) => (
         <SettingsSwitch
           key={option.service}

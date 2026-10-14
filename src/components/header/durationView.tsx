@@ -12,9 +12,7 @@ const DurationView = () => {
   const roomDuration = useAppSelector(
     (state) => state.session.currentRoom.metadata?.roomFeatures?.roomDuration,
   );
-  const startedAt = useAppSelector(
-    (state) => state.session.currentRoom.metadata?.startedAt,
-  );
+  const startedAt = useAppSelector((state) => state.session.currentRoom.metadata?.startedAt);
 
   const endTime = useMemo(() => {
     const duration = Number(roomDuration);
@@ -28,11 +26,9 @@ const DurationView = () => {
 
   const remaining = useRoomDurationCountdown(endTime);
 
-  // Show the clock only if the initial room duration is 60 minutes or less.
-  const showClock = useMemo(() => {
-    const duration = Number(roomDuration);
-    return duration > 0 && duration <= 60;
-  }, [roomDuration]);
+  // Show the clock only when the remaining time is 60 minutes or less.
+  const remainingInMs = endTime - Date.now();
+  const showClock = endTime > 0 && remainingInMs / (1000 * 60) <= 60;
 
   useEffect(() => {
     if (isRecorder) {
@@ -57,7 +53,7 @@ const DurationView = () => {
 
   return (
     showClock && (
-      <div className="timer text-xs md:text-sm border border-solid border-primary-color dark:border-dark-text/80 dark:text-dark-text/80 sm:py-[2px] px-3 rounded-lg mt-[2px] mr-[6px]">
+      <div className="timer text-xs md:text-sm text-Gray-950 dark:text-white border border-solid border-Gray-950 dark:border-white py-[2px] px-3 rounded-lg mr-[6px]">
         {remaining}
       </div>
     )
