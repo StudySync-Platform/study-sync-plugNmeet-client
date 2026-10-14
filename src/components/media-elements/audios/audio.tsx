@@ -1,5 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { RemoteAudioTrack } from 'livekit-client';
+import { throttle } from 'es-toolkit';
 
 import { useAppSelector } from '../../../store';
 import { participantsSelector } from '../../../store/slices/participantSlice';
@@ -7,22 +8,33 @@ import { participantsSelector } from '../../../store/slices/participantSlice';
 interface IAudioElmProps {
   audioTrack: RemoteAudioTrack;
   userId: string;
+  isLocalUser: boolean;
 }
 
-const AudioElm = ({ audioTrack, userId }: IAudioElmProps) => {
+const AudioElm = ({ audioTrack, userId, isLocalUser }: IAudioElmProps) => {
   const ref = useRef<HTMLAudioElement>(null);
-  const isNatsServerConnected = useAppSelector(
-    (state) => state.roomSettings.isNatsServerConnected,
-  );
+  const isNatsServerConnected = useAppSelector((state) => state.roomSettings.isNatsServerConnected);
   const audioVolume = useAppSelector(
     (state) => participantsSelector.selectById(state, userId)?.audioVolume,
+  );
+
+  const throttledSetVolume = useMemo(
+    () =>
+      throttle((volume: number) => {
+        if (audioTrack) {
+          audioTrack.setVolume(volume);
+        }
+      }, 200), // Throttle to run at most every 200ms
+    [audioTrack],
   );
 
   useEffect(() => {
     const el = ref.current;
     if (el) {
       audioTrack.attach(el);
-      if (typeof audioVolume !== 'undefined') {
+      if (isLocalUser) {
+        audioTrack.setVolume(0);
+      } else if (typeof audioVolume !== 'undefined') {
         audioTrack.setVolume(audioVolume);
       }
     }
@@ -33,25 +45,27 @@ const AudioElm = ({ audioTrack, userId }: IAudioElmProps) => {
       }
     };
     //eslint-disable-next-line
-  }, [audioTrack]);
+  }, [audioTrack, isLocalUser]);
 
   useEffect(() => {
-    if (audioTrack && typeof audioVolume !== 'undefined') {
-      audioTrack.setVolume(audioVolume);
+    if (isLocalUser) {
+      audioTrack.setVolume(0);
+    } else if (typeof audioVolume !== 'undefined') {
+      throttledSetVolume(audioVolume);
     }
-  }, [audioTrack, audioVolume]);
+  }, [audioVolume, throttledSetVolume, isLocalUser, audioTrack]);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) {
       return;
     }
-    if (!isNatsServerConnected) {
+    if (!isNatsServerConnected && !isLocalUser) {
       el.pause();
-    } else if (isNatsServerConnected && el.paused) {
-      el.play().then();
+    } else if ((isNatsServerConnected || isLocalUser) && el.paused) {
+      void el.play();
     }
-  }, [isNatsServerConnected]);
+  }, [isNatsServerConnected, isLocalUser]);
 
   return (
     <div style={{ display: 'none' }}>

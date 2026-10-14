@@ -1,16 +1,17 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import { RoomMetadataSchema } from 'plugnmeet-protocol-js';
+import { ClientType, RoomMetadataSchema } from 'plugnmeet-protocol-js';
 import { create } from '@bufbuild/protobuf';
 
 import {
-  ISession,
-  ICurrentUser,
   ICurrentRoom,
+  ICurrentUser,
   ICurrentUserMetadata,
   IRoomMetadata,
   IScreenSharing,
+  ISession,
   UserDeviceType,
 } from './interfaces/session';
+import { PnmConnectionQuality } from '../../helpers/livekit/ConnectionQualityMonitor';
 
 const initialState: ISession = {
   token: '',
@@ -26,6 +27,7 @@ const initialState: ISession = {
   totalVideoSubscribers: 0,
   userDeviceType: UserDeviceType.DESKTOP,
   isCloud: false,
+  clientType: ClientType.WEB,
   currentRoom: {
     sid: '',
     roomId: '',
@@ -45,7 +47,6 @@ const initialState: ISession = {
         allowViewOtherWebcams: true,
         allowViewOtherUsersList: true,
         adminOnlyWebcams: false,
-        allowPolls: true,
         roomDuration: '0',
         allowVirtualBg: true,
         allowRaiseHand: true,
@@ -57,15 +58,15 @@ const initialState: ISession = {
           onlyRecordAdminWebcams: false,
         },
         chatFeatures: {
-          allowChat: true,
-          allowFileUpload: true,
+          isAllow: true,
+          isAllowFileUpload: true,
           allowedFileTypes: ['jpg', 'png', 'zip'],
         },
         sharedNotePadFeatures: {
-          allowedSharedNotePad: true,
+          isAllow: true,
         },
         whiteboardFeatures: {
-          allowedWhiteboard: true,
+          isAllow: true,
           visible: false,
           whiteboardFileId: '',
           fileName: '',
@@ -73,7 +74,7 @@ const initialState: ISession = {
           totalPages: 0,
         },
         externalMediaPlayerFeatures: {
-          allowedExternalMediaPlayer: true,
+          isAllow: true,
           isActive: false,
         },
         waitingRoomFeatures: {
@@ -89,15 +90,18 @@ const initialState: ISession = {
         ingressFeatures: {
           isAllow: true,
         },
-        speechToTextTranslationFeatures: {
+        insightsFeatures: {
           isAllow: true,
-          isAllowTranslation: true,
-          isEnabled: false,
-          isEnabledTranslation: false,
-          allowedSpeechLangs: [],
-          allowedSpeechUsers: [],
-          allowedTransLangs: [],
-          maxNumTranLangsAllowSelecting: 10,
+          transcriptionFeatures: {
+            isAllow: true,
+            isAllowTranslation: true,
+          },
+          aiFeatures: {
+            isAllow: true,
+            aiTextChatFeatures: {
+              isAllow: true,
+            },
+          },
         },
         endToEndEncryptionFeatures: {
           isEnabled: false,
@@ -142,18 +146,12 @@ const sessionSlice = createSlice({
     setWebcamPaginating: (state, action: PayloadAction<boolean>) => {
       state.isWebcamPaginating = action.payload;
     },
-    updateCurrentUserMetadata: (
-      state,
-      action: PayloadAction<ICurrentUserMetadata>,
-    ) => {
+    updateCurrentUserMetadata: (state, action: PayloadAction<ICurrentUserMetadata>) => {
       if (state.currentUser) {
         state.currentUser.metadata = action.payload;
       }
     },
-    updateCurrentRoomMetadata: (
-      state,
-      action: PayloadAction<IRoomMetadata>,
-    ) => {
+    updateCurrentRoomMetadata: (state, action: PayloadAction<IRoomMetadata>) => {
       if (state.currentRoom) {
         state.currentRoom.metadata = action.payload;
         state.isActiveRtmpBroadcasting = action.payload.isActiveRtmp ?? false;
@@ -166,16 +164,17 @@ const sessionSlice = createSlice({
     updateTotalAudioSubscribers: (state, action: PayloadAction<number>) => {
       state.totalAudioSubscribers = action.payload;
     },
-    updateMuteOnStart: (state, action: PayloadAction<boolean>) => {
-      if (state.currentRoom.metadata?.roomFeatures) {
-        state.currentRoom.metadata.roomFeatures.muteOnStart = action.payload;
-      }
-    },
     updateUserDeviceType: (state, action: PayloadAction<UserDeviceType>) => {
       state.userDeviceType = action.payload;
     },
     updateIsCloud: (state, action: PayloadAction<boolean>) => {
       state.isCloud = action.payload;
+    },
+    updateClientType: (state, action: PayloadAction<ClientType>) => {
+      state.clientType = action.payload;
+    },
+    updateOverallConnectionQuality: (state, action: PayloadAction<PnmConnectionQuality>) => {
+      state.overallConnectionQuality = action.payload;
     },
   },
 });
@@ -192,9 +191,10 @@ export const {
   updateCurrentRoomMetadata,
   updateTotalVideoSubscribers,
   updateTotalAudioSubscribers,
-  updateMuteOnStart,
   updateUserDeviceType,
   updateIsCloud,
+  updateClientType,
+  updateOverallConnectionQuality,
 } = sessionSlice.actions;
 
 export default sessionSlice.reducer;

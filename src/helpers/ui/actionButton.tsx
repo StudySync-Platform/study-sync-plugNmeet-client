@@ -25,15 +25,12 @@ const ActionButton = ({
       onClick={onClick}
       disabled={isLoading || disabled}
       className={clsx(
-        'h-9 w-36 flex items-center justify-center cursor-pointer text-sm font-semibold bg-primary-color hover:bg-white border border-[#0088CC] rounded-[15px] text-white hover:text-Gray-950 transition-all duration-300 shadow-button-shadow disabled:opacity-50',
+        'primary-button h-9 w-36 flex items-center justify-center cursor-pointer text-sm font-semibold bg-Blue hover:bg-white border border-[#0088CC] rounded-[15px] text-white hover:text-Gray-950 transition-all duration-300 shadow-button-shadow focus-ring disabled:opacity-50 disabled:cursor-not-allowed',
         custom,
       )}
     >
       {isLoading ? (
-        <LoadingIcon
-          className="inline h-5 w-5 animate-spin text-white"
-          fillColor="currentColor"
-        />
+        <LoadingIcon className="inline h-5 w-5 animate-spin text-white" fillColor="currentColor" />
       ) : (
         children
       )}

@@ -1,15 +1,10 @@
-import React, { Fragment, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  Listbox,
-  ListboxButton,
-  ListboxOption,
-  ListboxOptions,
-  Transition,
-} from '@headlessui/react';
+import { Listbox, ListboxButton, ListboxOption, ListboxOptions } from '@headlessui/react';
+import { createSelector } from '@reduxjs/toolkit';
 
-import { store, useAppDispatch, useAppSelector } from '../../store';
-import { chatMessagesSelector } from '../../store/slices/chatMessagesSlice';
+import { RootState, useAppDispatch, useAppSelector } from '../../store';
+import { selectChatKeys } from '../../store/slices/chatMessagesSlice';
 import Messages from './messages';
 import { participantsSelector } from '../../store/slices/participantSlice';
 import {
@@ -17,85 +12,82 @@ import {
   updateUnreadMsgFrom,
 } from '../../store/slices/roomSettingsSlice';
 import { CloseIconSVG } from '../../assets/Icons/CloseIconSVG';
-import { updateIsActiveChatPanel } from '../../store/slices/bottomIconsActivitySlice';
+import { setActiveSidePanel } from '../../store/slices/bottomIconsActivitySlice';
 import { CheckMarkIcon } from '../../assets/Icons/CheckMarkIcon';
+import { ChatSyncIconSVG } from '../../assets/Icons/ChatSyncIconSVG';
+import i18n from '../../helpers/i18n';
+import { getNatsConn } from '../../helpers/nats';
+import ChatTranslation from './chatTranslation';
+import { DropdownIconSVG } from '../../assets/Icons/DropdownIconSVG';
 
-interface IChatOptions {
+interface IChatOption {
   id: string;
   title: string;
+  hasUnread: boolean;
 }
 
-const languages = [
-  { id: 1, value: 'EN', name: 'English' },
-  { id: 2, value: 'BN', name: 'Bangla' },
-  { id: 3, value: 'CH', name: 'Chinese' },
-  { id: 4, value: 'GR', name: 'Germany' },
-];
+const selectChatTabsData = createSelector(
+  [
+    selectChatKeys,
+    participantsSelector.selectEntities,
+    (state: RootState) => state.roomSettings.initiatePrivateChat,
+    (state: RootState) => state.roomSettings.unreadMsgFrom,
+    (state: RootState) => state.roomSettings.selectedChatOption,
+  ],
+  (chatKeys, participantEntities, initiatePrivateChat, unreadMsgFrom, selectedChatOption) => {
+    const allKeys = [...chatKeys];
+    // let's add user from initiatePrivateChat
+    if (initiatePrivateChat.userId && !allKeys.includes(initiatePrivateChat.userId)) {
+      allKeys.push(initiatePrivateChat.userId);
+    }
 
-const ChatTabs = () => {
-  const [language, setLanguage] = useState(languages[1]);
+    const options: IChatOption[] = [];
+    allKeys.forEach((k) => {
+      if (k === 'public') {
+        options.push({
+          id: 'public',
+          title: i18n.t('left-panel.public-chat'),
+          hasUnread: unreadMsgFrom.includes('public'),
+        });
+      } else {
+        const participant = participantEntities[k];
+        let title = k; // Use key as fallback
+        if (participant) {
+          title = participant.name;
+        } else if (initiatePrivateChat.userId === k) {
+          title = initiatePrivateChat.name;
+        }
+
+        options.push({
+          id: k,
+          title: title,
+          hasUnread: unreadMsgFrom.includes(k),
+        });
+      }
+    });
+
+    const selected = options.find((o) => o.id === selectedChatOption);
+    const selectedTitle = selected?.title ?? i18n.t('left-panel.public-chat');
+
+    return {
+      chatOptions: options,
+      selectedChatOption,
+      selectedTitle,
+      hasUnreadMessages: unreadMsgFrom.length > 0,
+    };
+  },
+);
+
+interface ChatTabsProps {
+  isRecorder: boolean;
+}
+
+const ChatTabs = ({ isRecorder }: ChatTabsProps) => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
 
-  const initiatePrivateChat = useAppSelector(
-    (state) => state.roomSettings.initiatePrivateChat,
-  );
-  const unreadMsgFrom = useAppSelector(
-    (state) => state.roomSettings.unreadMsgFrom,
-  );
-  const selectedChatOption = useAppSelector(
-    (state) => state.roomSettings.selectedChatOption,
-  );
-  const chatMessages = useAppSelector(chatMessagesSelector.selectAll);
-  const currentUser = store.getState().session.currentUser;
-
-  const privateChatUsers = useMemo(() => {
-    const users = new Map<string, string>();
-    if (initiatePrivateChat.userId !== '') {
-      users.set(initiatePrivateChat.userId, initiatePrivateChat.name);
-    }
-    chatMessages.forEach((m) => {
-      if (m.isPrivate) {
-        if (m.fromUserId !== currentUser?.userId) {
-          users.set(m.fromUserId, m.fromName ?? '');
-        } else if (
-          m.fromUserId === currentUser?.userId &&
-          m.toUserId &&
-          m.toUserId !== currentUser?.userId
-        ) {
-          const user = participantsSelector.selectById(
-            store.getState(),
-            m.toUserId,
-          );
-          if (user) {
-            users.set(user.userId, user.name);
-          }
-        }
-      }
-    });
-    return users;
-  }, [initiatePrivateChat, chatMessages, currentUser?.userId]);
-
-  const chatOptions = useMemo(() => {
-    const options: IChatOptions[] = [
-      {
-        id: 'public',
-        title: t('left-panel.public-chat'),
-      },
-    ];
-    privateChatUsers.forEach((name, id) => {
-      options.push({
-        id,
-        title: name,
-      });
-    });
-    return options;
-  }, [privateChatUsers, t]);
-
-  const selectedTitle = useMemo(() => {
-    const selected = chatOptions.find((o) => o.id === selectedChatOption);
-    return selected?.title ?? t('left-panel.public-chat');
-  }, [selectedChatOption, chatOptions, t]);
+  const { chatOptions, selectedChatOption, selectedTitle, hasUnreadMessages } =
+    useAppSelector(selectChatTabsData);
 
   const onChange = (id: string) => {
     dispatch(updateSelectedChatOption(id));
@@ -108,124 +100,136 @@ const ChatTabs = () => {
   };
 
   const closePanel = () => {
-    dispatch(updateIsActiveChatPanel(false));
+    dispatch(setActiveSidePanel(null));
   };
 
+  const [isSyncing, setIsSyncing] = useState(false);
+  const syncChat = useCallback(async () => {
+    if (isSyncing) {
+      return;
+    }
+    const conn = getNatsConn();
+    if (!conn) {
+      return;
+    }
+    setIsSyncing(true);
+    try {
+      await conn.requestPublicChatSync();
+    } finally {
+      // keep the spin visible briefly so the click feels acknowledged
+      setTimeout(() => setIsSyncing(false), 800);
+    }
+  }, [isSyncing]);
+
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      closeBtnRef.current?.focus();
+    }, 350);
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (isRecorder) {
+    return (
+      <div className="h-full">
+        <div className="h-full chat-messages-container">
+          <Messages messageKey={selectedChatOption} isRecorder={isRecorder} />
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="h-full">
-      <div className="top-chat-header flex items-center gap-2 h-10 3xl:h-14 px-3 3xl:px-5 justify-between">
+    <div className="h-full flex flex-col">
+      <div className="top-chat-header flex items-center gap-2 h-10 px-3 3xl:px-5 justify-between">
         <div className="left flex items-center gap-3">
-          <p className="text-sm 3xl:text-base text-Gray-950 3xl:font-medium leading-tight">
+          <p className="text-sm text-Gray-950 dark:text-white 3xl:font-medium leading-tight">
             {selectedChatOption === 'public'
               ? t('left-panel.public-chat')
               : t('left-panel.private-chat')}
           </p>
-          <Listbox value={language} onChange={setLanguage}>
-            <ListboxButton className="lang h-6 3xl:h-8 w-9 3xl:w-[43px] flex items-center justify-center cursor-pointer border border-Gray-300 rounded-md 3xl:rounded-[11px] text-xs 3xl:text-sm font-medium 3xl:font-semibold text-Gray-950">
-              {language.value}
-            </ListboxButton>
-            <ListboxOptions
-              anchor="bottom"
-              transition
-              className="border border-gray-200 rounded-xl shadow-dropdown-menu bg-white overflow-hidden w-40 py-1.5"
-            >
-              {languages.map((lang) => (
-                <ListboxOption key={lang.value} value={lang}>
-                  {({ selected }) => (
-                    <div className="text-sm cursor-pointer text-Gray-950 hover:bg-Gray-50 flex items-center justify-between px-3 3xl:px-4 py-2">
-                      <span>{lang.name}</span>{' '}
-                      {selected ? (
-                        <span>
-                          <CheckMarkIcon />
-                        </span>
-                      ) : null}
-                    </div>
-                  )}
-                </ListboxOption>
-              ))}
-            </ListboxOptions>
-          </Listbox>
+          <ChatTranslation />
         </div>
-        <div className="text-Gray-600 cursor-pointer" onClick={closePanel}>
-          <CloseIconSVG />
+        <div className="flex items-center gap-1">
+          {selectedChatOption === 'public' && (
+            <button
+              type="button"
+              aria-label={t('right-panel.sync-chat').toString()}
+              title={t('right-panel.sync-chat').toString()}
+              disabled={isSyncing}
+              className="flex h-7 w-7 items-center justify-center text-Gray-600 cursor-pointer focus-ring disabled:opacity-50 disabled:cursor-wait"
+              onClick={() => void syncChat()}
+            >
+              <ChatSyncIconSVG spinning={isSyncing} />
+            </button>
+          )}
+          <button
+            ref={closeBtnRef}
+            type="button"
+            aria-label={t('close').toString()}
+            className="flex h-7 w-7 items-center justify-center text-Gray-600 cursor-pointer focus-ring"
+            onClick={closePanel}
+          >
+            <CloseIconSVG />
+          </button>
         </div>
       </div>
       <Listbox value={selectedChatOption} onChange={onChange}>
         <div className="relative z-10 chat-tabs">
-          <ListboxButton className="flex items-center justify-between border-y border-Gray-200 h-8 3xl:h-10 w-full outline-hidden px-3 3xl:px-5 text-xs 3xl:text-sm text-Gray-700">
+          <ListboxButton className="flex items-center justify-between border-y border-Gray-200 dark:border-Gray-800 h-8 3xl:h-10 w-full outline-hidden focus-ring px-3 3xl:px-5 text-xs 3xl:text-sm text-Gray-700 dark:text-dark-text cursor-pointer">
             <p className="block truncate">
-              To:{' '}
-              <span className="font-medium text-Gray-950">{selectedTitle}</span>
+              To: <span className="font-medium text-Gray-950 dark:text-white">{selectedTitle}</span>
             </p>
-            <span className="pointer-events-none absolute inset-y-0 right-3 3xl:right-5 flex items-center">
-              {unreadMsgFrom.length ? (
-                <span className="shake pr-1 -mb-1">
+            <span className="pointer-events-none absolute inset-y-0 end-3 3xl:end-5 flex items-center">
+              {hasUnreadMessages && (
+                <span className="shake pe-1 -mb-1">
                   <i className="pnm-chat shake" />
                 </span>
-              ) : null}
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 16 16"
-                fill="none"
-                className="h-auto w-3 3xl:w-4"
-              >
-                <path d="M12 6L8 10L4 6" fill="#4D6680" />
-                <path
-                  d="M12 6L8 10L4 6H12Z"
-                  stroke="#4D6680"
-                  strokeWidth="1.67"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              )}
+              <DropdownIconSVG />
             </span>
           </ListboxButton>
-          <Transition
-            as={Fragment}
-            leave="transition ease-in duration-100"
-            leaveFrom="opacity-100 z-90"
-            leaveTo="opacity-0"
+          <ListboxOptions
+            transition
+            className="absolute max-h-60 w-[calc(100%-8px)] start-1 border border-Gray-100 dark:border-Gray-700 bg-white dark:bg-dark-primary shadow-lg rounded-2xl overflow-hidden p-2 transition ease-out data-[closed]:opacity-0 data-[enter]:duration-100 data-[leave]:duration-75"
           >
-            <ListboxOptions className="absolute max-h-60 w-[calc(100%-8px)] left-1 border border-Gray-100 bg-white shadow-lg rounded-2xl overflow-hidden p-2">
-              <div className="title h-8 3xl:h-10 w-full flex items-center text-xs 3xl:text-sm leading-none text-Gray-700 px-3 uppercase">
-                {t('left-panel.select-chat-conversation-title')}
-              </div>
-              {chatOptions.map((option) => (
-                <ListboxOption
-                  key={option.id}
-                  className={({ focus, selected }) =>
-                    `h-8 3xl:h-10 w-full cursor-pointer flex items-center text-sm 3xl:text-base gap-2 leading-none 3xl:font-medium text-Gray-950 px-3 rounded-lg transition-all duration-300 hover:bg-Gray-50 relative ${
-                      focus ? 'bg-Gray-50' : ''
-                    } ${selected ? 'bg-Gray-50' : ''}`
-                  }
-                  value={option.id}
-                >
-                  {({ selected }) => (
-                    <>
-                      <span>
-                        {option.title}
-                        {unreadMsgFrom.filter((id) => id === option.id)
-                          .length ? (
-                          <span className="shake pl-2">
-                            <i className="pnm-chat shake" />
-                          </span>
-                        ) : null}
-                      </span>
-                      {selected ? (
-                        <span className="right absolute right-3">
-                          <CheckMarkIcon />
+            <div className="title h-8 w-full flex items-center text-xs leading-none text-Gray-700 dark:text-dark-text px-3 uppercase">
+              {t('left-panel.select-chat-conversation-title')}
+            </div>
+            {chatOptions.map((option) => (
+              <ListboxOption
+                key={option.id}
+                className={({ focus, selected }) =>
+                  `h-8 w-full cursor-pointer flex items-center text-sm gap-2 leading-none 3xl:font-medium text-Gray-950 dark:text-dark-text px-3 rounded-lg transition-all duration-300 hover:bg-Gray-50 dark:hover:bg-dark-secondary2 relative ${
+                    focus ? 'bg-Gray-50 dark:bg-dark-secondary2' : ''
+                  } ${selected ? 'bg-Gray-50 dark:bg-dark-secondary2' : ''}`
+                }
+                value={option.id}
+              >
+                {({ selected }) => (
+                  <>
+                    <span>
+                      {option.title}
+                      {option.hasUnread && (
+                        <span className="shake ps-2">
+                          <i className="pnm-chat shake" />
                         </span>
-                      ) : null}
-                    </>
-                  )}
-                </ListboxOption>
-              ))}
-            </ListboxOptions>
-          </Transition>
+                      )}
+                    </span>
+                    {selected && (
+                      <span className="end absolute end-3">
+                        <CheckMarkIcon />
+                      </span>
+                    )}
+                  </>
+                )}
+              </ListboxOption>
+            ))}
+          </ListboxOptions>
         </div>
       </Listbox>
-      <div className="h-[calc(100%-135px)] 3xl:h-[calc(100%-176px)] chat-messages-container">
-        <Messages userId={selectedChatOption} />
+      <div className="flex-1 min-h-0 chat-messages-container">
+        <Messages messageKey={selectedChatOption} isRecorder={isRecorder} />
       </div>
     </div>
   );

@@ -8,13 +8,7 @@ interface ICheckboxProps {
   onChange: () => void;
 }
 
-const Checkbox = ({
-  id,
-  label,
-  description,
-  checked,
-  onChange,
-}: ICheckboxProps) => (
+const Checkbox = ({ id, label, description, checked, onChange }: ICheckboxProps) => (
   <div className="item flex items-start">
     <div className="input">
       <input
@@ -23,16 +17,16 @@ const Checkbox = ({
         type="checkbox"
         checked={checked}
         onChange={onChange}
-        className="border cursor-pointer border-Gray-300 bg-white shadow-input w-5 h-5 outline-hidden focus:border-[rgba(0,161,242,1)] focus:shadow-input-focus mt-1 dark:bg-dark-secondary dark:border-dark-text"
+        className="border cursor-pointer border-Gray-300 bg-white shadow-input w-5 h-5 outline-hidden focus:border-[rgba(0,161,242,1)] focus:shadow-input-focus focus-ring mt-1 dark:bg-dark-secondary dark:border-dark-text"
       />
     </div>
-    <div className="text-base w-full pl-4">
+    <div className="text-base w-full ps-2 sm:ps-4">
       <label
         htmlFor={id}
-        className="font-medium text-Gray-950 dark:text-dark-text cursor-pointer"
+        className="text-sm 3xl:text-base font-medium text-Gray-950 dark:text-dark-text cursor-pointer"
       >
         {label}
-        <p className="text-sm opacity-70 dark:opacity-80">{description}</p>
+        <p className="text-xs md:text-sm opacity-70 dark:opacity-80">{description}</p>
       </label>
     </div>
   </div>

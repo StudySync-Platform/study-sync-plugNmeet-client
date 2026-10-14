@@ -17,14 +17,11 @@ import FormattedInputField from '../../../helpers/ui/formattedInputField';
 const Ingress = () => {
   const { t } = useTranslation();
   const [name, setName] = useState<string>('broadcaster');
-  const [ingressType, setIngressType] = useState<IngressInput>(
-    IngressInput.RTMP_INPUT,
-  );
+  const [ingressType, setIngressType] = useState<IngressInput>(IngressInput.RTMP_INPUT);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const session = store.getState().session;
   const ingressFeatures = useAppSelector(
-    (state) =>
-      state.session.currentRoom?.metadata?.roomFeatures?.ingressFeatures,
+    (state) => state.session.currentRoom?.metadata?.roomFeatures?.ingressFeatures,
   );
 
   const handleSubmit = useCallback(async () => {
@@ -97,7 +94,7 @@ const Ingress = () => {
           <button
             onClick={handleSubmit}
             disabled={isLoading}
-            className="h-8 px-5 flex items-center justify-center text-sm font-semibold bg-primary-color hover:bg-white border border-[#0088CC] rounded-[15px] text-white hover:text-Gray-950 transition-all duration-300 shadow-button-shadow cursor-pointer disabled:opacity-50"
+            className="primary-button h-8 px-5 flex items-center justify-center text-sm font-semibold bg-Blue hover:bg-white border border-[#0088CC] rounded-[15px] text-white hover:text-Gray-950 transition-all duration-300 shadow-button-shadow cursor-pointer disabled:opacity-50"
           >
             {isLoading ? (
               <LoadingIcon
@@ -119,9 +116,7 @@ const Ingress = () => {
         <FormattedInputField
           label={t('ingress-features.ingress-type')}
           id="ingress_type"
-          value={getIngressTypeText(
-            ingressFeatures?.inputType ?? IngressInput.RTMP_INPUT,
-          )}
+          value={getIngressTypeText(ingressFeatures?.inputType ?? IngressInput.RTMP_INPUT)}
           readOnly={true}
         />
         <FormattedInputField
@@ -142,9 +137,7 @@ const Ingress = () => {
 
   return (
     <div className="mt-2">
-      {ingressFeatures?.url && ingressFeatures?.streamKey
-        ? renderInfo()
-        : renderForm()}
+      {ingressFeatures?.url && ingressFeatures?.streamKey ? renderInfo() : renderForm()}
     </div>
   );
 };

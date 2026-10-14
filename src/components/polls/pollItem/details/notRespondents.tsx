@@ -2,11 +2,7 @@ import React, { useMemo } from 'react';
 import { differenceWith } from 'es-toolkit';
 import { useTranslation } from 'react-i18next';
 
-import {
-  getFormatedRespondents,
-  PollDataWithOption,
-  Respondents,
-} from '../../utils';
+import { getFormatedRespondents, PollDataWithOption, Respondents } from '../../utils';
 import { useAppSelector } from '../../../../store';
 import { selectBasicParticipants } from '../../../../store/slices/participantSlice';
 
@@ -33,12 +29,12 @@ const NotRespondents = ({ pollDataWithOption }: NotRespondentsProps) => {
 
   return (
     <div className="px-5 py-5">
-      <p className="text-sm font-medium text-Gray-800 mb-3">
+      <p className="text-sm font-medium text-Gray-800 dark:text-dark-text mb-3">
         {t('polls.not-respondents-total', {
           count: notRespondentsCount,
         })}
       </p>
-      <div className="wrap relative rounded-xl bg-Gray-50 border border-gray-300 overflow-auto">
+      <div className="wrap relative rounded-xl bg-Gray-50 dark:bg-dark-secondary border border-gray-300 dark:border-Gray-800 overflow-auto">
         <div className="inner flex">{formattedNotRespondents}</div>
       </div>
     </div>

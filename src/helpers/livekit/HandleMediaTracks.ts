@@ -11,43 +11,32 @@ import {
 
 import { IConnectLivekit } from './types';
 import { store } from '../../store';
-import {
-  participantsSelector,
-  updateParticipant,
-} from '../../store/slices/participantSlice';
-import { updateIsMicMuted } from '../../store/slices/bottomIconsActivitySlice';
-import {
-  ICurrentUser,
-  IRoomMetadata,
-} from '../../store/slices/interfaces/session';
+import { participantsSelector, updateParticipant } from '../../store/slices/participantSlice';
+import { updateIsMicMuted, updateIsWebcamMuted } from '../../store/slices/bottomIconsActivitySlice';
+import { ICurrentUser, IRoomMetadata } from '../../store/slices/interfaces/session';
 import { updatePinCamUserId } from '../../store/slices/roomSettingsSlice';
-import {
-  addOrUpdateSpeaker,
-  removeOneSpeaker,
-} from '../../store/slices/activeSpeakersSlice';
-import { audioActivityManager } from '../libs/AudioActivityManager';
+import { addOrUpdateSpeaker, removeOneSpeaker } from '../../store/slices/activeSpeakersSlice';
+import { addAudioStream, removeAudioStream } from '../libs/AudioActivityManager';
+import { toPlugNmeetUserIdPrimary } from '../utils';
 
 export default class HandleMediaTracks {
-  private that: IConnectLivekit;
+  private connectLivekit: IConnectLivekit;
   private roomMetadata: IRoomMetadata | undefined;
   private currentUser: ICurrentUser | undefined;
 
-  constructor(that: IConnectLivekit) {
-    this.that = that;
+  constructor(connectLivekit: IConnectLivekit) {
+    this.connectLivekit = connectLivekit;
+    const { currentUser, currentRoom } = store.getState().session;
+    this.roomMetadata = currentRoom.metadata;
+    this.currentUser = currentUser;
   }
 
-  public localTrackPublished = (
-    track: LocalTrackPublication,
-    participant: LocalParticipant,
-  ) => {
+  public localTrackPublished = (track: LocalTrackPublication, participant: LocalParticipant) => {
     this.addSubscriber(track, participant);
     this.addSpeaker(track, participant);
   };
 
-  public localTrackUnpublished = (
-    track: LocalTrackPublication,
-    participant: LocalParticipant,
-  ) => {
+  public localTrackUnpublished = (track: LocalTrackPublication, participant: LocalParticipant) => {
     this.removeSubscriber(track, participant);
     this.removeSpeaker(track, participant);
   };
@@ -59,61 +48,62 @@ export default class HandleMediaTracks {
   ) => {
     this.addSubscriber(track, participant);
     this.addSpeaker(track, participant);
-    // we can also update connection quality
-    store.dispatch(
-      updateParticipant({
-        id: participant.identity,
-        changes: {
-          connectionQuality: participant.connectionQuality,
-        },
-      }),
-    );
   };
 
-  public trackUnsubscribed = (
-    track: RemoteTrackPublication,
-    participant: RemoteParticipant,
-  ) => {
+  public trackUnsubscribed = (track: RemoteTrackPublication, participant: RemoteParticipant) => {
     this.removeSubscriber(track, participant);
     this.removeSpeaker(track, participant);
   };
 
   public trackMuted = (track: TrackPublication, participant: Participant) => {
-    store.dispatch(
-      updateParticipant({
-        id: participant.identity,
-        changes: {
-          isMuted: true,
-        },
-      }),
-    );
+    const userId = toPlugNmeetUserIdPrimary(participant.identity);
 
-    if (participant.identity === this.currentUser?.userId) {
-      store.dispatch(updateIsMicMuted(true));
+    if (track.source === Track.Source.Microphone) {
+      store.dispatch(
+        updateParticipant({
+          id: userId,
+          changes: {
+            isMuted: true,
+          },
+        }),
+      );
+
+      if (userId === this.currentUser?.userId) {
+        store.dispatch(updateIsMicMuted(true));
+      }
+      this.removeSpeaker(track, participant);
+    } else if (track.source === Track.Source.Camera) {
+      if (userId === this.currentUser?.userId) {
+        store.dispatch(updateIsWebcamMuted(true));
+      }
     }
-    this.removeSpeaker(track, participant);
   };
 
   public trackUnmuted = (track: TrackPublication, participant: Participant) => {
-    store.dispatch(
-      updateParticipant({
-        id: participant.identity,
-        changes: {
-          isMuted: false,
-        },
-      }),
-    );
+    const userId = toPlugNmeetUserIdPrimary(participant.identity);
 
-    if (participant.identity === this.currentUser?.userId) {
-      store.dispatch(updateIsMicMuted(false));
+    if (track.source === Track.Source.Microphone) {
+      store.dispatch(
+        updateParticipant({
+          id: userId,
+          changes: {
+            isMuted: false,
+          },
+        }),
+      );
+
+      if (userId === this.currentUser?.userId) {
+        store.dispatch(updateIsMicMuted(false));
+      }
+      this.addSpeaker(track, participant);
+    } else if (track.source === Track.Source.Camera) {
+      if (userId === this.currentUser?.userId) {
+        store.dispatch(updateIsWebcamMuted(false));
+      }
     }
-    this.addSpeaker(track, participant);
   };
 
-  public trackSubscriptionFailed = (
-    track_sid: string,
-    participant: RemoteParticipant,
-  ) => {
+  public trackSubscriptionFailed = (track_sid: string, participant: RemoteParticipant) => {
     // To do
     console.log('==== trackSubscriptionFailed ====');
     console.log(participant.name, track_sid);
@@ -129,103 +119,114 @@ export default class HandleMediaTracks {
     console.log(participant.name, streamState);
   };
 
+  public processExistingTrack = (track: RemoteTrackPublication, participant: RemoteParticipant) => {
+    this.addSubscriber(track, participant);
+    this.addSpeaker(track, participant);
+  };
+
+  private _shouldAddWebcam(participant: Participant): boolean {
+    const userId = toPlugNmeetUserIdPrimary(participant.identity);
+    // Always add to display own webcam.
+    if (userId === this.currentUser?.userId) {
+      return true;
+    }
+
+    const user = participantsSelector.selectById(store.getState(), userId);
+
+    // If we don't have the participant's metadata, deny subscription as a precaution.
+    if (!user?.metadata) {
+      return false;
+    }
+
+    // Handle recorder-specific logic.
+    if (this.currentUser?.isRecorder) {
+      const recordingFeatures = this.roomMetadata?.roomFeatures?.recordingFeatures;
+
+      // Deny if the user has disabled webcam recording for themselves.
+      if (user.metadata.recordWebcam === false) {
+        return false;
+      }
+      // Deny if the room is set to only record admins and this user is not an admin.
+      if (recordingFeatures?.onlyRecordAdminWebcams && !user.metadata.isAdmin) {
+        return false;
+      }
+      // Otherwise, the recorder can subscribe.
+      return true;
+    }
+
+    // Handle regular user webcam view permissions.
+    const { adminOnlyWebcams, allowViewOtherWebcams } = this.roomMetadata?.roomFeatures || {};
+
+    // If webcam viewing is restricted and the current user is not an admin...
+    if ((adminOnlyWebcams || !allowViewOtherWebcams) && !this.currentUser?.metadata?.isAdmin) {
+      // ...then they can only see webcams of other admin users.
+      return user.metadata.isAdmin;
+    }
+
+    // If no specific restrictions apply, allow the subscription.
+    return true;
+  }
+
   private addSubscriber(
     track: LocalTrackPublication | RemoteTrackPublication,
     participant: LocalParticipant | RemoteParticipant,
   ) {
     if (!this.roomMetadata) {
-      this.roomMetadata = store.getState().session.currentRoom
-        .metadata as IRoomMetadata;
+      this.roomMetadata = store.getState().session.currentRoom.metadata;
     }
     if (!this.currentUser) {
       this.currentUser = store.getState().session.currentUser;
     }
 
-    if (
-      participant.identity !== this.currentUser?.userId &&
-      track.source === Track.Source.Camera
-    ) {
-      const user = participantsSelector.selectById(
-        store.getState(),
-        participant.identity,
-      );
+    const userId = toPlugNmeetUserIdPrimary(participant.identity);
 
-      // if admin_only_webcams or allow_view_other_webcams is enabled that time
-      // only admin user can see all webcams
-      // other user can see only admin users' webcams.
-      if (
-        (this.roomMetadata.roomFeatures?.adminOnlyWebcams ||
-          !this.roomMetadata.roomFeatures?.allowViewOtherWebcams) &&
-        !this.currentUser?.metadata?.isAdmin
-      ) {
-        // We'll check if this user is an admin or not. Otherwise, no webcam will show up.
-        if (user && user.metadata && !user.metadata.isAdmin) {
+    switch (track.source) {
+      case Track.Source.ScreenShare:
+      case Track.Source.ScreenShareAudio: {
+        store.dispatch(
+          updateParticipant({
+            id: userId,
+            changes: { screenShareTrack: 1 },
+          }),
+        );
+        this.connectLivekit.addScreenShareTrack(userId, track);
+        break;
+      }
+      case Track.Source.Microphone: {
+        const count = participant
+          .getTrackPublications()
+          .filter((t) => t.source === Track.Source.Microphone).length;
+
+        store.dispatch(
+          updateParticipant({
+            id: userId,
+            changes: {
+              audioTracks: count,
+              isMuted: track.audioTrack?.isMuted ?? false,
+              audioVolume: store.getState().roomSettings.roomAudioVolume,
+            },
+          }),
+        );
+        this.connectLivekit.addAudioSubscriber(participant);
+        break;
+      }
+      case Track.Source.Camera: {
+        if (!this._shouldAddWebcam(participant)) {
+          // If the current user doesn't have permission, stop here.
           return;
         }
+        const count = participant
+          .getTrackPublications()
+          .filter((t) => t.source === Track.Source.Camera).length;
+        store.dispatch(
+          updateParticipant({
+            id: userId,
+            changes: { videoTracks: count },
+          }),
+        );
+        this.connectLivekit.addVideoSubscriber(participant);
+        break;
       }
-
-      if (this.currentUser?.isRecorder) {
-        // we'll set up logic for webcam recording
-        if (user && user.metadata) {
-          if (!user.metadata.recordWebcam) {
-            // if record webcam is disabled then we won't load webcams
-            return;
-          } else if (
-            !user.metadata.isAdmin &&
-            this.roomMetadata.roomFeatures?.recordingFeatures
-              ?.onlyRecordAdminWebcams
-          ) {
-            // if room setting was enabled to record webcam only for admin,
-            // then we'll simply won't load webcams
-            return;
-          }
-        }
-      }
-    }
-
-    if (
-      track.source === Track.Source.ScreenShare ||
-      track.source === Track.Source.ScreenShareAudio
-    ) {
-      store.dispatch(
-        updateParticipant({
-          id: participant.identity,
-          changes: {
-            screenShareTrack: 1,
-          },
-        }),
-      );
-      this.that.addScreenShareTrack(participant.identity, track);
-    } else if (track.source === Track.Source.Microphone) {
-      this.that.addAudioSubscriber(participant);
-      const count = participant
-        .getTrackPublications()
-        .filter((track) => track.source === Track.Source.Microphone).length;
-      // now update store
-      store.dispatch(
-        updateParticipant({
-          id: participant.identity,
-          changes: {
-            audioTracks: count === 0 ? 1 : count,
-            isMuted: track.audioTrack?.isMuted ?? false,
-            audioVolume: store.getState().roomSettings.roomAudioVolume,
-          },
-        }),
-      );
-    } else if (track.source === Track.Source.Camera) {
-      this.that.addVideoSubscriber(participant);
-      const count = participant
-        .getTrackPublications()
-        .filter((track) => track.source === Track.Source.Camera).length;
-      // now update store
-      store.dispatch(
-        updateParticipant({
-          id: participant.identity,
-          changes: {
-            videoTracks: count === 0 ? 1 : count,
-          },
-        }),
-      );
     }
   }
 
@@ -233,53 +234,54 @@ export default class HandleMediaTracks {
     track: LocalTrackPublication | RemoteTrackPublication,
     participant: LocalParticipant | RemoteParticipant,
   ) {
-    if (
-      track.source === Track.Source.ScreenShare ||
-      track.source === Track.Source.ScreenShareAudio
-    ) {
-      store.dispatch(
-        updateParticipant({
-          id: participant.identity,
-          changes: {
-            screenShareTrack: 0,
-          },
-        }),
-      );
-      this.that.removeScreenShareTrack(participant.identity);
-    } else if (track.source === Track.Source.Microphone) {
-      this.that.removeAudioSubscriber(participant.identity);
-      store.dispatch(
-        updateParticipant({
-          id: participant.identity,
-          changes: {
-            audioTracks:
-              participant
-                .getTrackPublications()
-                .filter((track) => track.source === Track.Source.Microphone)
-                .length ?? 0,
-            isMuted: track.audioTrack?.isMuted ?? false,
-          },
-        }),
-      );
-    } else if (track.source === Track.Source.Camera) {
-      this.that.removeVideoSubscriber(participant.identity);
-      // now update store
-      store.dispatch(
-        updateParticipant({
-          id: participant.identity,
-          changes: {
-            videoTracks:
-              participant
-                .getTrackPublications()
-                .filter((track) => track.source === Track.Source.Camera)
-                .length ?? 0,
-          },
-        }),
-      );
+    const userId = toPlugNmeetUserIdPrimary(participant.identity);
 
-      if (store.getState().roomSettings.pinCamUserId === participant.identity) {
-        // so, need to unset
-        store.dispatch(updatePinCamUserId(undefined));
+    switch (track.source) {
+      case Track.Source.ScreenShare:
+      case Track.Source.ScreenShareAudio: {
+        store.dispatch(
+          updateParticipant({
+            id: userId,
+            changes: { screenShareTrack: 0 },
+          }),
+        );
+        this.connectLivekit.removeScreenShareTrack(userId);
+        break;
+      }
+      case Track.Source.Microphone: {
+        this.connectLivekit.removeAudioSubscriber(userId);
+        store.dispatch(
+          updateParticipant({
+            id: userId,
+            changes: {
+              audioTracks:
+                participant
+                  .getTrackPublications()
+                  .filter((t) => t.source === Track.Source.Microphone).length ?? 0,
+              isMuted: track.audioTrack?.isMuted ?? false,
+            },
+          }),
+        );
+        break;
+      }
+      case Track.Source.Camera: {
+        this.connectLivekit.removeVideoSubscriber(userId);
+        store.dispatch(
+          updateParticipant({
+            id: userId,
+            changes: {
+              videoTracks:
+                participant.getTrackPublications().filter((t) => t.source === Track.Source.Camera)
+                  .length ?? 0,
+            },
+          }),
+        );
+
+        if (store.getState().roomSettings.pinCamUserId === userId) {
+          // so, need to unset
+          store.dispatch(updatePinCamUserId(undefined));
+        }
+        break;
       }
     }
   }
@@ -300,18 +302,20 @@ export default class HandleMediaTracks {
     ) {
       return;
     }
+    const userId = toPlugNmeetUserIdPrimary(participant.identity);
+    const userInfo = participantsSelector.selectById(store.getState(), userId);
 
-    audioActivityManager.addStream(track.audioTrack.mediaStream, (activity) => {
+    addAudioStream(track.audioTrack.mediaStream, (activity) => {
       store.dispatch(
         addOrUpdateSpeaker({
-          userId: participant.identity,
-          name: participant.name ?? '',
+          userId: userId,
+          name: userInfo?.name ?? participant.name ?? '',
           isSpeaking: activity.isSpeaking,
           audioLevel: activity.audioLevel,
           lastSpokeAt: activity.lastSpokeAt,
         }),
       );
-    });
+    }).then();
   }
 
   /**
@@ -321,14 +325,13 @@ export default class HandleMediaTracks {
    * @private
    */
   private removeSpeaker(track: TrackPublication, participant: Participant) {
-    if (
-      track.source !== Track.Source.Microphone ||
-      !track.audioTrack ||
-      !track.audioTrack.mediaStream
-    ) {
+    if (track.source !== Track.Source.Microphone) {
       return;
     }
-    audioActivityManager.removeStream(track.audioTrack.mediaStream.id);
-    store.dispatch(removeOneSpeaker(participant.identity));
+    if (track.audioTrack?.mediaStream) {
+      removeAudioStream(track.audioTrack.mediaStream.id);
+    }
+    const userId = toPlugNmeetUserIdPrimary(participant.identity);
+    store.dispatch(removeOneSpeaker(userId));
   }
 }

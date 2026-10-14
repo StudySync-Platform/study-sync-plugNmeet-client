@@ -29,16 +29,16 @@
   --color-Dark-blue: #069;
 
   --color-Gray-25: #fafcff;
-  --color-Gray-50: #F9F5FF;
-  --color-Gray-100: #F3E8FF;
-  --color-Gray-200: #E9D5FF;
-  --color-Gray-300: #D8B4FE;
-  --color-Gray-500: #7C3AED;
+  --color-Gray-50: #f0f6fc;
+  --color-Gray-100: #e1edfa;
+  --color-Gray-200: #d3e5f7;
+  --color-Gray-300: #c2daf2;
+  --color-Gray-500: rgba(143, 173, 204, 1);
   --color-Gray-600: #7493b2;
-  --color-Gray-700: #5B21B6;
-  --color-Gray-800: #4338CA;
-  --color-Gray-900: #3730A3;
-  --color-Gray-950: #2E1065;
+  --color-Gray-700: #4d6680;
+  --color-Gray-800: #233240;
+  --color-Gray-900: #131d26;
+  --color-Gray-950: #0c131a;
 
   --color-Red-25: #fffafa;
   --color-Red-50: #fcf0f0;
@@ -62,5 +62,5 @@
   --radius-MSG: 0 15px 15px;
   --radius-MSGME: 15px 0 15px 15px;
 
-  --breakpoint-3xl: 1640px;
+  --breakpoint-3xl: 110rem;
 }

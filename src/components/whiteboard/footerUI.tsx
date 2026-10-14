@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
 import { toast } from 'react-toastify';
 import {
@@ -12,9 +12,10 @@ import { useTranslation } from 'react-i18next';
 
 import { store, useAppDispatch, useAppSelector } from '../../store';
 import { setWhiteboardCurrentPage } from '../../store/slices/whiteboard';
-import { broadcastCurrentPageNumber } from './helpers/handleRequestedWhiteboardData';
+import { broadcastCurrentPageNumber } from './helpers/handleRequests';
 import sendAPIRequest from '../../helpers/api/plugNmeetAPI';
-import { savePageData } from './helpers/utils';
+import { sleep } from '../../helpers/utils';
+import { getWhiteboardController, saveWhiteboardLastPage } from './collab';
 
 interface IFooterUIProps {
   excalidrawAPI: ExcalidrawImperativeAPI | null;
@@ -48,14 +49,18 @@ const FooterUI = ({
 
   const debouncedSetCurrentPage = useMemo(
     () =>
-      debounce(async (newPage: number, pageToSave: number) => {
-        // First, save the state of the page we are leaving.
+      debounce(async (newPage: number) => {
+        // First, flush the current page's yjs snapshot to IndexedDB.
         if (isPresenter && excalidrawAPI) {
-          savePageData(excalidrawAPI, pageToSave);
+          await getWhiteboardController().saveCurrentState();
         }
-
-        // Then, proceed with changing the page.
+        // Remember the last page for the current file.
+        const { currentWhiteboardOfficeFileId } = store.getState().whiteboard;
+        await saveWhiteboardLastPage(currentWhiteboardOfficeFileId, newPage);
+        // broadcast first so that user can prepare for page change
         await broadcastCurrentPageNumber(newPage);
+        await sleep(300);
+        // Then, proceed with changing the page.
         dispatch(setWhiteboardCurrentPage(newPage));
       }, 300),
     [dispatch, isPresenter, excalidrawAPI],
@@ -63,7 +68,7 @@ const FooterUI = ({
 
   const setCurrentPage = (page: number) => {
     if (showSwitchingWarning()) return;
-    debouncedSetCurrentPage(page, currentPage);
+    debouncedSetCurrentPage(page);
   };
 
   const handlePre = () => {
@@ -82,10 +87,47 @@ const FooterUI = ({
     }
   };
 
+  const takeOverPresenter = useCallback(async () => {
+    if (!currentUser) {
+      return;
+    }
+    const body = create(SwitchPresenterReqSchema, {
+      userId: currentUser.userId,
+      task: SwitchPresenterTask.PROMOTE,
+    });
+
+    const r = await sendAPIRequest(
+      'switchPresenter',
+      toBinary(SwitchPresenterReqSchema, body),
+      false,
+      'application/protobuf',
+      'arraybuffer',
+    );
+    const res = fromBinary(CommonResponseSchema, new Uint8Array(r));
+
+    if (res.status) {
+      toast(t('left-panel.menus.notice.presenter-changed'), {
+        toastId: 'presenter-change-status',
+        type: 'info',
+      });
+    } else {
+      toast(t(res.msg), {
+        toastId: 'presenter-change-status',
+        type: 'error',
+      });
+    }
+  }, [currentUser, t]);
+
   const renderForAdmin = () => {
     return (
       <div className="flex wb-page-navigation ml-2">
-        <button className="pre" onClick={handlePre} disabled={currentPage <= 1}>
+        <button
+          type="button"
+          className="pre focus-ring"
+          onClick={handlePre}
+          disabled={currentPage <= 1}
+          aria-label={t('whiteboard.previous-page')}
+        >
           <i className="pnm-arrow-left-short text-black dark:text-white text-xl opacity-50 rtl:rotate-180" />
         </button>
         <select
@@ -102,9 +144,11 @@ const FooterUI = ({
           ))}
         </select>
         <button
-          className="next"
+          type="button"
+          className="next focus-ring"
           onClick={handleNext}
           disabled={currentPage >= totalPages}
+          aria-label={t('whiteboard.next-page')}
         >
           <i className="pnm-arrow-right-short text-black dark:text-white text-xl opacity-50 rtl:rotate-180" />
         </button>
@@ -112,64 +156,42 @@ const FooterUI = ({
     );
   };
 
-  const takeOverPresenter = async () => {
-    const body = create(SwitchPresenterReqSchema, {
-      userId: currentUser?.userId,
-      task: SwitchPresenterTask.PROMOTE,
-    });
-
-    const r = await sendAPIRequest(
-      'switchPresenter',
-      toBinary(SwitchPresenterReqSchema, body),
-      false,
-      'application/protobuf',
-      'arraybuffer',
-    );
-    const res = fromBinary(CommonResponseSchema, new Uint8Array(r));
-
-    if (res.status) {
-      toast(t('left-panel.menus.notice.presenter-changed'), {
-        toastId: 'lock-setting-status',
-        type: 'info',
-      });
-    } else {
-      toast(t(res.msg), {
-        toastId: 'lock-setting-status',
-        type: 'error',
-      });
-    }
-  };
-
   const renderForParticipant = () => {
     return (
       <div
         className={`renderForParticipant flex gap-2 text-sm items-center justify-start md:justify-center relative ${
-          isAdmin && !isRecorder
-            ? 'ltr:pl-3 rtl:pr-3 md:pl-12  md:rtl:pr-4'
-            : 'ltr:pl-3 rtl:pr-3'
+          isAdmin && !isRecorder ? 'ltr:pl-3 rtl:pr-3 md:pl-12  md:rtl:pr-4' : 'ltr:pl-3 rtl:pr-3'
         } `}
       >
         {isAdmin && !isRecorder && (
-          <button className="presenter" onClick={takeOverPresenter}>
+          <button
+            type="button"
+            className="presenter focus-ring"
+            onClick={takeOverPresenter}
+            aria-label={t('whiteboard.take-over-presenter')}
+          >
             <i className="pnm-presenter text-[14px]" />
           </button>
         )}
-        <button
-          className={`px-2 ${isFollowing ? 'following' : ''}`}
-          onClick={handleFollowPresenter}
-          title={
-            isFollowing
-              ? t('whiteboard.unfollow-presenter-tooltip')
-              : t('whiteboard.follow-presenter-tooltip')
-          }
-        >
-          <i
-            className={`pnm-device-connected text-[14px] ltr:mr-1 rtl:ml-1 ${
-              isFollowing ? 'animate-pulse' : ''
-            }`}
-          />
-          {isFollowing ? t('whiteboard.unfollow') : t('whiteboard.follow')}
-        </button>
+        {!isRecorder && (
+          <button
+            type="button"
+            className={`px-2 focus-ring ${isFollowing ? 'following' : ''}`}
+            onClick={handleFollowPresenter}
+            title={
+              isFollowing
+                ? t('whiteboard.unfollow-presenter-tooltip')
+                : t('whiteboard.follow-presenter-tooltip')
+            }
+          >
+            <i
+              className={`pnm-device-connected text-[14px] ltr:mr-1 rtl:ml-1 ${
+                isFollowing ? 'animate-pulse' : ''
+              }`}
+            />
+            {isFollowing ? t('whiteboard.unfollow') : t('whiteboard.follow')}
+          </button>
+        )}
         {t('whiteboard.page', { count: currentPage })}
       </div>
     );
@@ -178,4 +200,4 @@ const FooterUI = ({
   return isPresenter ? renderForAdmin() : renderForParticipant();
 };
 
-export default React.memo(FooterUI);
+export default FooterUI;

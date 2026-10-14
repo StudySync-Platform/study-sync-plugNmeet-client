@@ -1,73 +1,108 @@
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { debounce } from 'es-toolkit';
-import { store, useAppDispatch } from '../../store';
+import { useTranslation } from 'react-i18next';
+
+import { store, useAppDispatch, useAppSelector } from '../../store';
 import {
-  updateIsActiveChatPanel,
-  updateIsActiveParticipantsPanel,
+  setActiveSidePanel,
   updateIsEnabledExtendedVerticalCamView,
 } from '../../store/slices/bottomIconsActivitySlice';
 
 import { useMainAreaState } from './hooks/useMainAreaState';
 import { useMainAreaCustomCSS } from './hooks/useMainAreaCustomCSS';
-import { doRefreshWhiteboard } from '../../store/slices/whiteboard';
+import { APP_LAYOUT_CLASSES, MAIN_AREA_DIMENSIONS } from '../../helpers/dimensions';
+import { useSidePanelResize } from './hooks/useSidePanelResize';
+import { triggerRefreshWhiteboard } from '../../store/slices/whiteboard';
+import { updateIsSidePanelOpened } from '../../store/slices/roomSettingsSlice';
+import { getMediaServerConn } from '../../helpers/livekit/utils';
 
 import ActiveSpeakers from '../active-speakers';
 import MainView from './mainView';
 import PollsComponent from '../polls';
 import ChatComponent from '../chat';
 import ParticipantsComponent from '../participants';
+import RoomsPanel from '../breakout-room/roomsPanel';
+import SidePanel from './sidePanel';
 
 const MainArea = () => {
+  const { t } = useTranslation();
   const dispatch = useAppDispatch();
+  const mediaServerConn = getMediaServerConn();
+
   const { isRecorder, roomFeatures } = useMemo(() => {
     const session = store.getState().session;
+    const roomFeatures = session.currentRoom.metadata?.roomFeatures;
     return {
       isRecorder: !!session.currentUser?.isRecorder,
-      roomFeatures: session.currentRoom.metadata?.roomFeatures,
+      roomFeatures,
     };
   }, []);
 
+  const showBreakoutRoomsPanel = useAppSelector((state) => {
+    const meta = state.session.currentRoom?.metadata;
+    return !!meta?.roomFeatures?.breakoutRoomFeatures?.isActive && !meta?.isBreakoutRoom;
+  });
+
+  const isNatsServerConnected = useAppSelector((state) => state.roomSettings.isNatsServerConnected);
+  const natsPrevioulyState = useRef<boolean>(isNatsServerConnected);
+
+  const extendedViewPreference = useRef<boolean>(false);
+
   const {
-    isActiveParticipantsPanel,
-    isActiveScreenSharingView,
+    columnCameraWidth,
+    columnCameraPosition,
+    activeSidePanel,
     hasScreenShareSubscribers,
-    isActiveWebcamsView,
     hasVideoSubscribers,
     isActiveWhiteboard,
     isActiveExternalMediaPlayer,
     isActiveDisplayExternalLink,
-    isActiveChatPanel,
-    isActivePollsPanel,
-    screenHeight,
   } = useMainAreaState();
 
   useEffect(() => {
-    if (!roomFeatures?.chatFeatures?.allowChat) {
-      dispatch(updateIsActiveChatPanel(false));
+    if (!roomFeatures?.chatFeatures?.isAllow) {
+      // If chat is not allowed and it's the active panel, close it.
+      if (store.getState().bottomIconsActivity.activeSidePanel === 'CHAT') {
+        dispatch(setActiveSidePanel(null));
+      }
     }
 
-    if (!isRecorder) {
-      dispatch(updateIsActiveParticipantsPanel(true));
-    }
-
+    // if recorder then webcam always has extended view
     if (isRecorder) {
       dispatch(updateIsEnabledExtendedVerticalCamView(true));
     }
 
-    if (
-      !isRecorder &&
-      'Notification' in window &&
-      Notification.permission !== 'denied'
-    ) {
+    // ask for notification permission
+    // we'll not bother if permission was rejected before
+    if (!isRecorder && 'Notification' in window && Notification.permission !== 'denied') {
       Notification.requestPermission().then();
     }
   }, [dispatch, isRecorder, roomFeatures]);
 
+  useEffect(() => {
+    if (!mediaServerConn) {
+      return;
+    }
+
+    const publications = Array.from(
+      mediaServerConn.room.localParticipant.trackPublications.values(),
+    );
+
+    if (!isNatsServerConnected) {
+      // NATS has disconnected. Pause all upstream tracks.
+      const pausePromises = publications.map((pub) => pub.pauseUpstream());
+      Promise.all(pausePromises).then();
+    } else if (isNatsServerConnected && !natsPrevioulyState.current) {
+      // NATS has reconnected (was previously false, now true). Resume tracks.
+      const resumePromises = publications.map((pub) => pub.resumeUpstream());
+      Promise.all(resumePromises).then();
+    }
+
+    // Update the ref to prepare for the next change.
+    natsPrevioulyState.current = isNatsServerConnected;
+  }, [isNatsServerConnected, mediaServerConn]);
+
   const customCSS = useMainAreaCustomCSS({
-    isActiveChatPanel,
-    isActiveParticipantsPanel,
-    isActivePollsPanel,
-    isActiveScreenSharingView,
     hasScreenShareSubscribers,
     isActiveWhiteboard,
     isActiveExternalMediaPlayer,
@@ -75,120 +110,131 @@ const MainArea = () => {
     isRecorder,
   });
 
-  const renderMainComponentElms = useMemo(() => {
-    return (
-      <MainView
-        isRecorder={isRecorder}
-        isActiveWhiteboard={isActiveWhiteboard}
-        isActiveExternalMediaPlayer={isActiveExternalMediaPlayer ?? false}
-        isActiveDisplayExternalLink={isActiveDisplayExternalLink ?? false}
-        isActiveScreenSharingView={isActiveScreenSharingView}
-        hasScreenShareSubscribers={hasScreenShareSubscribers}
-        isActiveWebcamsView={isActiveWebcamsView}
-        hasVideoSubscribers={hasVideoSubscribers}
-      />
-    );
-  }, [
-    isRecorder,
-    isActiveScreenSharingView,
-    hasScreenShareSubscribers,
-    isActiveWebcamsView,
-    hasVideoSubscribers,
-    isActiveDisplayExternalLink,
-    isActiveExternalMediaPlayer,
-    isActiveWhiteboard,
-  ]);
-
   const debouncedRefresh = useMemo(
     () =>
       debounce(() => {
-        dispatch(doRefreshWhiteboard());
+        dispatch(triggerRefreshWhiteboard());
       }, 500),
     [dispatch],
   );
 
   const handleSidePanelToggled = useCallback(() => {
-    if (isActiveWhiteboard) debouncedRefresh();
-  }, [debouncedRefresh, isActiveWhiteboard]);
+    // This logic can be simplified now.
+    // We just need to know if *any* panel is open.
+    const anyPanelIsOpen = store.getState().bottomIconsActivity.activeSidePanel !== null;
+    dispatch(updateIsSidePanelOpened(anyPanelIsOpen));
+
+    if (isActiveWhiteboard) {
+      debouncedRefresh();
+    }
+
+    if (anyPanelIsOpen && !isRecorder) {
+      // Save the user's current preference before forcing extended view off,
+      // so we can restore it when the panel closes.
+      extendedViewPreference.current =
+        store.getState().bottomIconsActivity.isEnabledExtendedVerticalCamView;
+      dispatch(updateIsEnabledExtendedVerticalCamView(false));
+    } else if (!anyPanelIsOpen && !isRecorder && extendedViewPreference.current) {
+      // Restore extended view only if the screen is wide enough to accommodate
+      // the side panel + extended strip + reasonable content area.
+      const screenWidth = store.getState().bottomIconsActivity.screenWidth;
+      if (screenWidth >= MAIN_AREA_DIMENSIONS.verticalWebcams.extendedRestoreMinWidth) {
+        dispatch(updateIsEnabledExtendedVerticalCamView(true));
+      }
+      extendedViewPreference.current = false;
+    }
+  }, [dispatch, debouncedRefresh, isActiveWhiteboard, isRecorder]);
+
+  const { panelWidth, isResizing, dragHandleProps, nudgeWidth, resetWidth } = useSidePanelResize({
+    isRecorder,
+    onResizeEnd: isActiveWhiteboard ? () => debouncedRefresh() : undefined,
+  });
+
+  const anyPanelActive = activeSidePanel !== null;
+  const mainAreaClasses = `plugNmeet-app-main-area overflow-hidden relative flex flex-1 w-full ${customCSS} column-camera-width-${columnCameraWidth} column-camera-position-${columnCameraPosition} ${isResizing ? 'side-panel-resizing' : ''}`;
+  const middleAreaClasses = `middle-area relative transition-all duration-300 w-full ${
+    activeSidePanel ? APP_LAYOUT_CLASSES.middleAreaOpen : ''
+  } ${isResizing ? 'transition-none!' : ''}`;
 
   return (
-    <div
-      id="main-area"
-      className={`relative flex flex-col w-full h-full overflow-hidden bg-Gray-25 ${customCSS}`}
-      style={{ height: `${screenHeight}px` }}
-    >
-      {/* Header */}
-      <header className="flex justify-between items-center px-6 py-3 bg-purple-600 text-white shadow-md">
-        <div className="flex items-center gap-2">
-          <img
-            src="/logo.png"
-            alt="Logo"
-            className="h-8 w-8 rounded-full bg-white"
-          />
-          <h2 className="text-lg font-semibold">Study Session</h2>
-        </div>
-        <div className="flex items-center gap-3 text-sm opacity-90">
-          <span>My Test Room</span>
-          <span>Physics - Momentum</span>
-        </div>
-      </header>
-
-      {/* Main content */}
-      <div className="flex flex-1 overflow-hidden bg-gradient-to-b from-purple-50 to-white">
-        {/* Grid view */}
-        <div className="flex-1 flex flex-col items-center justify-center overflow-auto">
-          <ActiveSpeakers />
-          {renderMainComponentElms}
-        </div>
-
-        {/* Right panel */}
-        <div
-          className={`relative transition-all duration-300 ease-in-out ${
-            isActiveParticipantsPanel ||
-            isActiveChatPanel ||
-            isActivePollsPanel
-              ? 'w-[320px]'
-              : 'w-0'
-          } border-l border-gray-200 bg-white overflow-hidden`}
-        >
-          {isActiveParticipantsPanel && (
-            <ParticipantsComponent onToggle={handleSidePanelToggled} />
+    <div id="main-area" className={mainAreaClasses}>
+      <div className="inner flex justify-between flex-1">
+        <div className={middleAreaClasses}>
+          {isNatsServerConnected && (
+            <>
+              <div className="absolute top-2 start-1/2 ltr:-translate-x-1/2 rtl:translate-x-1/2 z-[9999] pointer-events-none w-full [will-change:transform] [backface-visibility:hidden]">
+                <ActiveSpeakers activeSidePanel={activeSidePanel} />
+              </div>
+              <MainView
+                isRecorder={isRecorder}
+                isActiveWhiteboard={isActiveWhiteboard}
+                isActiveExternalMediaPlayer={!!isActiveExternalMediaPlayer}
+                isActiveDisplayExternalLink={!!isActiveDisplayExternalLink}
+                hasScreenShareSubscribers={hasScreenShareSubscribers}
+                hasVideoSubscribers={hasVideoSubscribers}
+              />
+            </>
           )}
-          {isActiveChatPanel && roomFeatures?.chatFeatures?.allowChat && (
+        </div>
+        <SidePanel
+          isActive={activeSidePanel === 'PARTICIPANTS'}
+          panelClass="participants-panel"
+          ariaLabel={t('left-panel.participants', { total: '' }).toString().replace(' ()', '')}
+          onToggle={handleSidePanelToggled}
+          dragHandleProps={dragHandleProps}
+          panelWidthForA11y={panelWidth}
+          onNudgeWidth={nudgeWidth}
+          onResetWidth={resetWidth}
+          anyPanelActive={anyPanelActive}
+        >
+          <ParticipantsComponent />
+        </SidePanel>
+        {roomFeatures?.chatFeatures?.isAllow && (
+          <SidePanel
+            isActive={activeSidePanel === 'CHAT'}
+            panelClass="chat-panel"
+            ariaLabel="Chat panel"
+            onToggle={handleSidePanelToggled}
+            dragHandleProps={dragHandleProps}
+            panelWidthForA11y={panelWidth}
+            onNudgeWidth={nudgeWidth}
+            onResetWidth={resetWidth}
+            anyPanelActive={anyPanelActive}
+          >
             <ChatComponent />
-          )}
-          {isActivePollsPanel && roomFeatures?.pollsFeatures?.isAllow && (
+          </SidePanel>
+        )}
+        {roomFeatures?.pollsFeatures?.isAllow && (
+          <SidePanel
+            isActive={activeSidePanel === 'POLLS'}
+            panelClass="polls-panel"
+            ariaLabel="Polls panel"
+            onToggle={handleSidePanelToggled}
+            dragHandleProps={dragHandleProps}
+            panelWidthForA11y={panelWidth}
+            onNudgeWidth={nudgeWidth}
+            onResetWidth={resetWidth}
+            anyPanelActive={anyPanelActive}
+          >
             <PollsComponent />
-          )}
-        </div>
+          </SidePanel>
+        )}
+        {showBreakoutRoomsPanel && (
+          <SidePanel
+            isActive={activeSidePanel === 'BREAKOUT_ROOMS'}
+            panelClass="breakout-rooms-panel"
+            ariaLabel={t('breakout-room.rooms-panel-title').toString()}
+            onToggle={handleSidePanelToggled}
+            dragHandleProps={dragHandleProps}
+            panelWidthForA11y={panelWidth}
+            onNudgeWidth={nudgeWidth}
+            onResetWidth={resetWidth}
+            anyPanelActive={anyPanelActive}
+          >
+            <RoomsPanel />
+          </SidePanel>
+        )}
       </div>
-
-      {/* Bottom Control Bar */}
-      <footer className="absolute bottom-6 left-1/2 transform -translate-x-1/2 flex items-center gap-6 bg-white shadow-md px-8 py-4 rounded-full">
-        <button className="p-3 rounded-full hover:bg-gray-100 text-lg">🎙️</button>
-        <button className="p-3 rounded-full hover:bg-gray-100 text-lg">📷</button>
-        <button className="p-3 rounded-full hover:bg-gray-100 text-lg">🖥️</button>
-        <button
-          className={`p-3 rounded-full hover:bg-gray-100 text-lg ${
-            isActiveParticipantsPanel ? 'bg-purple-100' : ''
-          }`}
-          onClick={() =>
-            dispatch(updateIsActiveParticipantsPanel(!isActiveParticipantsPanel))
-          }
-        >
-          👥
-        </button>
-        <button
-          className={`p-3 rounded-full hover:bg-gray-100 text-lg ${
-            isActiveChatPanel ? 'bg-purple-100' : ''
-          }`}
-          onClick={() =>
-            dispatch(updateIsActiveChatPanel(!isActiveChatPanel))
-          }
-        >
-          💬
-        </button>
-      </footer>
     </div>
   );
 };

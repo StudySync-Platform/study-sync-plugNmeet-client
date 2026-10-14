@@ -1,99 +1,38 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import useVirtual from 'react-cool-virtual';
-import { createSelector } from '@reduxjs/toolkit';
-import { RootState, store, useAppDispatch, useAppSelector } from '../../store';
 
 import ParticipantComponent from './participant';
-import { participantsSelector } from '../../store/slices/participantSlice';
 import RemoveParticipantAlertModal, {
   IRemoveParticipantAlertModalData,
 } from './removeParticipantAlertModal';
-
 import { SearchIconSVG } from '../../assets/Icons/SearchIconSVG';
 import { CloseIconSVG } from '../../assets/Icons/CloseIconSVG';
-import { updateIsActiveParticipantsPanel } from '../../store/slices/bottomIconsActivitySlice';
 
-const selectFilteredParticipants = createSelector(
-  [
-    participantsSelector.selectAll,
-    (state: RootState, isAdmin: boolean) => isAdmin,
-    (state: RootState, isAdmin: boolean, search: string) => search,
-    (
-      state: RootState,
-      isAdmin: boolean,
-      search: string,
-      allowViewOtherUsers: boolean,
-    ) => allowViewOtherUsers,
-    (
-      state: RootState,
-      isAdmin: boolean,
-      search: string,
-      allowViewOtherUsers: boolean,
-      currentUserId: string | undefined,
-    ) => currentUserId,
-  ],
-  (participants, isAdmin, search, allowViewOtherUsers, currentUserId) => {
-    let list = participants
-      .slice()
-      .filter(
-        (p) =>
-          p.name !== '' &&
-          p.userId !== 'RECORDER_BOT' &&
-          p.userId !== 'RTMP_BOT',
-      );
+import { store, useAppDispatch, useAppSelector } from '../../store';
+import { selectVisibleParticipants } from '../../store/slices/participantSlice';
+import { setActiveSidePanel } from '../../store/slices/bottomIconsActivitySlice';
 
-    if (!isAdmin && !allowViewOtherUsers) {
-      list = list.filter(
-        (p) => p.metadata.isAdmin || p.userId === currentUserId,
-      );
-    }
-
-    if (search) {
-      list = list.filter((p) =>
-        p.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
-      );
-    }
-
-    if (isAdmin) {
-      return list.sort((a, b) =>
-        a.metadata.waitForApproval === b.metadata.waitForApproval
-          ? 0
-          : a.metadata.waitForApproval
-          ? -1
-          : 1,
-      );
-    }
-    return list;
-  },
-);
-
-interface Props {
-  onToggle?: () => void;
-}
-
-const ParticipantsComponent: React.FC<Props> = ({ onToggle }) => {
+const ParticipantsComponent = () => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
-  const [searchParticipant, setSearchParticipant] = useState('');
+  const [searchParticipant, setSearchParticipant] = useState<string>('');
   const [removeParticipantData, setRemoveParticipantData] =
     useState<IRemoveParticipantAlertModalData>();
 
-  const { currentUser, currentIsAdmin, currentUserUserId, allowViewOtherUsers } =
-    useMemo(() => {
-      const session = store.getState().session;
-      const currentUser = session.currentUser;
-      return {
-        currentUser,
-        currentIsAdmin: !!currentUser?.metadata?.isAdmin,
-        currentUserUserId: currentUser?.userId,
-        allowViewOtherUsers:
-          !!session.currentRoom.metadata?.roomFeatures?.allowViewOtherUsersList,
-      };
-    }, []);
+  const { currentUser, currentIsAdmin, currentUserUserId, allowViewOtherUsers } = useMemo(() => {
+    const session = store.getState().session;
+    const currentUser = session.currentUser;
+    return {
+      currentUser,
+      currentIsAdmin: !!currentUser?.metadata?.isAdmin,
+      currentUserUserId: currentUser?.userId,
+      allowViewOtherUsers: !!session.currentRoom.metadata?.roomFeatures?.allowViewOtherUsersList,
+    };
+  }, []);
 
   const participants = useAppSelector((state) =>
-    selectFilteredParticipants(
+    selectVisibleParticipants(
       state,
       currentIsAdmin,
       searchParticipant,
@@ -108,24 +47,39 @@ const ParticipantsComponent: React.FC<Props> = ({ onToggle }) => {
 
   const onOpenRemoveParticipantAlert = useCallback(
     (name: string, user_id: string, type: string) => {
-      setRemoveParticipantData({ name, userId: user_id, removeType: type });
+      setRemoveParticipantData({
+        name,
+        userId: user_id,
+        removeType: type,
+      });
     },
     [],
   );
 
-  const onCloseAlertModal = () => setRemoveParticipantData(undefined);
+  const onCloseAlertModal = () => {
+    setRemoveParticipantData(undefined);
+  };
 
   const closePanel = () => {
-    dispatch(updateIsActiveParticipantsPanel(false));
-    onToggle?.();
+    dispatch(setActiveSidePanel(null));
   };
+
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      closeBtnRef.current?.focus();
+    }, 350);
+    return () => clearTimeout(timer);
+  }, []);
 
   const renderParticipant = useCallback(
     (index: number) => {
+      if (!participants.length || typeof participants[index] === 'undefined') {
+        return null;
+      }
       const participant = participants[index];
-      if (!participant) return null;
-
       const isRemoteParticipant = currentUser?.userId !== participant.userId;
+
       return (
         <ParticipantComponent
           key={participant.userId}
@@ -140,57 +94,59 @@ const ParticipantsComponent: React.FC<Props> = ({ onToggle }) => {
   );
 
   return (
-    <div className="flex flex-col h-full bg-white border-l border-gray-200">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-        <p className="text-sm font-medium text-gray-900">
-          {t('left-panel.participants', { total: participants.length })}
-        </p>
-        <button
-          onClick={closePanel}
-          className="text-gray-600 hover:text-gray-800 transition"
-        >
-          <CloseIconSVG />
-        </button>
-      </div>
-
-      {/* Search */}
-      <div className="flex items-center px-4 py-3 border-b border-gray-200">
-        <div className="relative w-full">
-          <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none">
-            <SearchIconSVG />
+    <div className="side-panel-bg-color relative z-10 w-full bg-Gray-25 dark:bg-dark-primary border-s border-Gray-200 dark:border-Gray-800 h-full">
+      <button
+        ref={closeBtnRef}
+        type="button"
+        aria-label={t('close').toString()}
+        className="inline-block absolute z-50 end-3 3xl:end-5 top-[10px] text-Gray-600 dark:text-white cursor-pointer focus-ring"
+        onClick={closePanel}
+      >
+        <CloseIconSVG />
+      </button>
+      <div className="inner-wrapper relative z-20 w-full">
+        <div className="top flex items-center h-10 px-3 3xl:px-5">
+          <p className="text-sm text-Gray-950 dark:text-white font-medium leading-tight">
+            {t('left-panel.participants', {
+              total: participants.length,
+            })}
+          </p>
+        </div>
+        <div className="search-participants-wrap h-[55px] flex items-center px-3 3xl:px-5 border-y border-Gray-200 dark:border-Gray-800">
+          <div className="w-full relative">
+            <div className="search-icon text-Gray-600 dark:text-white absolute top-1/2 -translate-y-1/2 start-3 3xl:start-4 pointer-events-none">
+              <SearchIconSVG />
+            </div>
+            <input
+              dir="auto"
+              type="text"
+              name="search-participants"
+              id="search-participants"
+              placeholder={t('left-panel.search-participant')}
+              className="text-Gray-950 dark:text-white placeholder:text-Gray-600 dark:placeholder:text-white h-9 rounded-lg 3xl:rounded-[15px] bg-white dark:bg-dark-primary border border-Gray-200 dark:border-Gray-800 w-full ps-8 3xl:ps-10 outline-hidden focus-ring text-xs 3xl:text-sm"
+              onChange={(e) => setSearchParticipant(e.target.value)}
+            />
           </div>
-          <input
-            type="text"
-            name="search-participants"
-            id="search-participants"
-            placeholder="Search participant"
-            value={searchParticipant}
-            onChange={(e) => setSearchParticipant(e.target.value)}
-            className="w-full h-9 pl-9 rounded-full border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-purple-400"
-          />
+        </div>
+
+        <div ref={outerRef as any} className="scrollBar overflow-auto h-[calc(100vh-240px)]">
+          <ul
+            className="all-participants-wrap px-2 xl:px-3 3xl:px-5 list-none"
+            ref={innerRef as any}
+          >
+            {items.map(({ index, measureRef }) => (
+              <li
+                key={index}
+                ref={measureRef}
+                className="w-full list-none min-h-[40px] 3xl:min-h-[60px] py-1 flex items-center"
+              >
+                {renderParticipant(index)}
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
 
-      {/* List */}
-      <div
-        ref={outerRef as any}
-        className="flex-1 overflow-y-auto scrollBar p-3"
-      >
-        <ul ref={innerRef as any} className="space-y-2">
-          {items.map(({ index, measureRef }) => (
-            <li
-              key={index}
-              ref={measureRef}
-              className="w-full list-none flex items-center"
-            >
-              {renderParticipant(index)}
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      {/* Remove Participant Modal */}
       {removeParticipantData && (
         <RemoveParticipantAlertModal
           name={removeParticipantData.name}

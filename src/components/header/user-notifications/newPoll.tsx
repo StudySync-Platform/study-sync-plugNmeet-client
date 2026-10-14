@@ -1,7 +1,7 @@
 import React, { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { updateIsActivePollsPanel } from '../../../store/slices/bottomIconsActivitySlice';
+import { setActiveSidePanel } from '../../../store/slices/bottomIconsActivitySlice';
 import { useAppDispatch } from '../../../store';
 import { PollsIconSVG } from '../../../assets/Icons/PollsIconSVG';
 import ActionButton from '../../../helpers/ui/actionButton';
@@ -16,7 +16,7 @@ const NewPoll = ({ createdAt, onClosePopover }: INewPollProps) => {
   const dispatch = useAppDispatch();
 
   const openPollsPanel = useCallback(() => {
-    dispatch(updateIsActivePollsPanel(true));
+    dispatch(setActiveSidePanel('POLLS'));
     if (onClosePopover) {
       onClosePopover();
     }
@@ -32,17 +32,17 @@ const NewPoll = ({ createdAt, onClosePopover }: INewPollProps) => {
   };
 
   return (
-    <div className="notification notif-new-poll w-full flex gap-4 py-2 px-4 border-b border-Gray-200">
+    <div className="notification notif-new-poll w-full flex gap-4 py-2 px-4 border-b border-Gray-200 dark:border-Gray-800">
       <div className="icon w-9 h-9 rounded-full bg-Gray-100 text-Blue2-800 relative inline-flex items-center justify-center">
         <PollsIconSVG classes="w-[15px]" />
       </div>
-      <div className="text flex-1 text-Gray-800 text-sm">
-        <p>{t('polls.new-poll')}</p>
-        <div className="bottom flex justify-between text-Gray-800 text-xs items-center">
+      <div className="text flex-1 text-Gray-800 dark:text-white text-sm">
+        <p>{t('polls.notifications.new-poll')}</p>
+        <div className="bottom flex justify-between text-Gray-800 dark:text-white text-xs items-center">
           <span className="">{formatDate(createdAt)}</span>{' '}
           <ActionButton
             onClick={openPollsPanel}
-            custom="!h-5 w-auto px-2 !text-[10px] !rounded-md bg-primary-color2-500 hover:bg-primary-color2-600 border-Blue2-600"
+            custom="!h-5 w-auto px-2 !text-[10px] !rounded-md bg-Blue2-500 hover:bg-Blue2-600 border-Blue2-600"
           >
             {t('open')}
           </ActionButton>

@@ -1,113 +1,119 @@
 import { Dispatch } from 'react';
+import { toast } from 'react-toastify';
+import { isE2EESupported } from 'livekit-client';
+import { jetstream, JetStreamClient } from '@nats-io/jetstream';
+import { create, toBinary, toJsonString } from '@bufbuild/protobuf';
+import { NatsConnection, tokenAuthenticator, wsconnect } from '@nats-io/nats-core';
 import {
   AnalyticsDataMsgSchema,
   AnalyticsEvents,
   AnalyticsEventType,
+  ChatMessage,
   ChatMessageSchema,
+  ChatMeta,
+  ChatMetaSchema,
   DataChannelMessageSchema,
   DataMsgBodyType,
-  MediaServerConnInfo,
-  NatsInitialData,
-  NatsInitialDataSchema,
-  NatsKvUserInfoSchema,
+  EndToEndEncryptionFeatures,
+  InsightsTranslateTextReqSchema,
   NatsMsgClientToServer,
   NatsMsgClientToServerEvents,
   NatsMsgClientToServerSchema,
-  NatsMsgServerToClient,
-  NatsMsgServerToClientEvents,
-  NatsMsgServerToClientSchema,
   NatsSubjects,
+  PrivateDataDeliverySchema,
 } from 'plugnmeet-protocol-js';
-import {
-  create,
-  fromBinary,
-  fromJson,
-  fromJsonString,
-  toBinary,
-  toJsonString,
-} from '@bufbuild/protobuf';
-import { toast } from 'react-toastify';
-import {
-  NatsConnection,
-  wsconnect,
-  tokenAuthenticator,
-} from '@nats-io/nats-core';
-import { jetstream, JetStreamClient, JsMsg } from '@nats-io/jetstream';
-import { isURL } from 'validator';
-import { isE2EESupported } from 'livekit-client';
+import { canDeleteMessage, canEditMessage } from '../../components/chat/utils';
+
+import MessageQueue from './MessageQueue';
+import SubscriptionHandler from './SubscriptionHandler';
 
 import { IErrorPageProps } from '../../components/extra-pages/Error';
-import { IConnectLivekit, LivekitInfo } from '../livekit/types';
-import { createLivekitConnection } from '../livekit/utils';
-import HandleRoomData from './HandleRoomData';
-import HandleParticipants from './HandleParticipants';
-import HandleDataMessage from './HandleDataMessage';
-import HandleWhiteboard from './HandleWhiteboard';
-import HandleChat from './HandleChat';
+import { IConnectLivekit } from '../livekit/types';
 import { store } from '../../store';
-import HandleSystemData from './HandleSystemData';
 import i18n from '../i18n';
-import { addToken } from '../../store/slices/sessionSlice';
-import MessageQueue from './MessageQueue';
 import {
-  encryptMessage,
-  importSecretKeyFromMaterial,
+  decryptDataFromUint8Array,
+  encryptDataToUint8Array,
   importSecretKeyFromPlainText,
 } from '../libs/cryptoMessages';
 import { ICurrentRoom } from '../../store/slices/interfaces/session';
-import { formatNatsError, getWhiteboardDonors, isUserRecorder } from '../utils';
+import { formatNatsError, getChatDonors, isUserRecorder, isValidHttpUrl } from '../utils';
 import {
+  addSelfInsertedE2EESecretKey,
   addUserNotification,
   updateIsNatsServerConnected,
 } from '../../store/slices/roomSettingsSlice';
 import { roomConnectionStatus } from '../../components/app/helper';
-import { audioActivityManager } from '../libs/AudioActivityManager';
+import { destroyAudioManager } from '../libs/AudioActivityManager';
+import { deleteRoomDB } from '../libs/idb';
+import { createLivekitConnection } from '../livekit/utils';
+import { executeChatTranslation } from '../../components/translation-transcription/helpers/apiConnections';
+import { teardownNativePublisher } from '../nativeBridge';
+import { getNotepadController } from '../../components/shared-notepad/NotepadController';
+import { getWhiteboardController } from '../../components/whiteboard/collab';
+import { autoReturnToMainRoom } from '../../components/breakout-room/utils/breakoutRoom';
 
-const RENEW_TOKEN_FREQUENT = 3 * 60 * 1000;
-const PING_INTERVAL = 60 * 1000;
-const STATUS_CHECKER_INTERVAL = 500;
+const RENEW_TOKEN_FREQUENT = 3 * 60 * 1000,
+  PING_INTERVAL = 10 * 1000,
+  STATUS_CHECKER_INTERVAL = 500,
+  USERS_SYNC_INTERVAL = 30 * 1000,
+  MAX_MISSED_PONGS = 12;
+export type PrivateDataDeliveryType = 'CHAT' | 'DATA_MSG' | 'WHITEBOARD_MSG';
 
 export default class ConnectNats {
+  // connections
   private _nc: NatsConnection | undefined;
   private _js: JetStreamClient | undefined;
+  // auth
   private readonly _natsWSUrls: string[];
   private _token: string;
+  // e2ee
+  private _enableE2EE: boolean = false;
   private _enableE2EEChat: boolean = false;
+  private _enableE2EEWhiteboard: boolean = false;
+  // ui
   private toastIdConnecting: any = undefined;
 
+  // room info
   private readonly _roomId: string;
   private readonly _userId: string;
   private _userName: string = '';
   private _isAdmin: boolean = false;
-  private _isRecorder: boolean = false;
+  private readonly _isRecorder: boolean = false;
+  private readonly _roomStreamName: string;
   private readonly _subjects: NatsSubjects;
   // this value won't be updated
   // so, don't use it for metadata those will be updated
   private _currentRoomInfo: ICurrentRoom | undefined;
 
+  // intervals
   private tokenRenewInterval: any;
   private pingInterval: any;
   private statusCheckerInterval: any;
+  private reconciliationInterval: any;
+  private missedPongs = 0;
+  private pongMissedToastId: any;
   private isRoomReconnecting: boolean = false;
+  private _mediaServerDataRequested = false;
 
+  // state setters
   private readonly _setErrorState: Dispatch<IErrorPageProps>;
   private readonly _setRoomConnectionStatusState: Dispatch<roomConnectionStatus>;
   private readonly _setCurrentMediaServerConn: Dispatch<IConnectLivekit>;
 
+  // media
   private _mediaServerConn: IConnectLivekit | undefined = undefined;
-  private messageQueue: MessageQueue;
-  private handleRoomData: HandleRoomData;
-  private handleSystemData: HandleSystemData;
-  private handleParticipants: HandleParticipants;
-  private handleChat: HandleChat;
-  private handleDataMsg: HandleDataMessage;
-  private handleWhiteboard: HandleWhiteboard;
+  // helpers
+  private readonly messageQueue: MessageQueue;
+  private readonly subscriptionHandler: SubscriptionHandler;
+  private readonly reconnectCallbacks = new Set<() => void>();
 
   constructor(
     natsWSUrls: string[],
     token: string,
     roomId: string,
     userId: string,
+    roomStreamName: string,
     subjects: NatsSubjects,
     setErrorState: Dispatch<IErrorPageProps>,
     setRoomConnectionStatusState: Dispatch<roomConnectionStatus>,
@@ -117,75 +123,168 @@ export default class ConnectNats {
     this._token = token;
     this._roomId = roomId;
     this._userId = userId;
+    this._isRecorder = isUserRecorder(userId);
+    this._roomStreamName = roomStreamName;
     this._subjects = subjects;
+
     this._setErrorState = setErrorState;
     this._setRoomConnectionStatusState = setRoomConnectionStatusState;
     this._setCurrentMediaServerConn = setCurrentMediaServerConn;
 
     this.messageQueue = new MessageQueue();
-    this.handleRoomData = new HandleRoomData();
-    this.handleSystemData = new HandleSystemData();
-    this.handleParticipants = new HandleParticipants(this);
-    this.handleChat = new HandleChat(this);
-    this.handleDataMsg = new HandleDataMessage(this);
-    this.handleWhiteboard = new HandleWhiteboard();
+    this.subscriptionHandler = new SubscriptionHandler(this);
   }
 
+  // getters & setters for private properties
+  /**
+   * NATS connection
+   */
+  get nc(): NatsConnection | undefined {
+    return this._nc;
+  }
+  /**
+   * NATS JetStream client
+   */
+  get js(): JetStreamClient | undefined {
+    return this._js;
+  }
+  /**
+   * Is the current user an admin
+   */
   get isAdmin(): boolean {
     return this._isAdmin;
   }
-
+  /**
+   * Set if the current user is an admin
+   * @param isAdmin
+   */
+  set isAdmin(isAdmin: boolean) {
+    this._isAdmin = isAdmin;
+  }
+  /**
+   * The ID of the room
+   */
   get roomId(): string {
     return this._roomId;
   }
-
+  /**
+   * The ID of the current user
+   */
   get userId(): string {
     return this._userId;
   }
-
+  /**
+   * The name of the current user
+   */
   get userName(): string {
     return this._userName;
   }
-
+  /**
+   * Set the name of the current user
+   * @param userName
+   */
+  set userName(userName: string) {
+    this._userName = userName;
+  }
+  /**
+   * Is the current user a recorder
+   */
   get isRecorder(): boolean {
     return this._isRecorder;
   }
-
+  /**
+   * The name of the room stream
+   */
+  get roomStreamName(): string {
+    return this._roomStreamName;
+  }
+  /**
+   * NATS subjects
+   */
+  get subjects(): NatsSubjects {
+    return this._subjects;
+  }
+  /**
+   * The media server connection
+   */
   get mediaServerConn(): IConnectLivekit | undefined {
     return this._mediaServerConn;
+  }
+  /**
+   * The NATS token
+   */
+  get token(): string {
+    return this._token;
+  }
+  /**
+   * Set the NATS token
+   * @param token
+   */
+  set token(token: string) {
+    this._token = token;
+  }
+  /**
+   * Is E2EE enabled
+   */
+  get enableE2EE(): boolean {
+    return this._enableE2EE;
+  }
+  /**
+   * Is E2EE enabled for chat
+   */
+  get enableE2EEChat(): boolean {
+    return this._enableE2EEChat;
+  }
+  /**
+   * Is E2EE enabled for whiteboard
+   */
+  get enableE2EEWhiteboard(): boolean {
+    return this._enableE2EEWhiteboard;
+  }
+  /**
+   * The current room info
+   */
+  get currentRoomInfo(): ICurrentRoom | undefined {
+    return this._currentRoomInfo;
+  }
+  /**
+   * Set the current room info
+   * @param currentRoomInfo
+   */
+  set currentRoomInfo(currentRoomInfo: ICurrentRoom | undefined) {
+    this._currentRoomInfo = currentRoomInfo;
   }
 
   public openConn = async () => {
     try {
       this._nc = await wsconnect({
+        name: `plugnmeet-client-${this._roomId}_${this._userId}`,
         servers: this._natsWSUrls,
         authenticator: tokenAuthenticator(() => this._token),
+        pingInterval: PING_INTERVAL,
+        noEcho: true,
       });
+      this.messageQueue.setNc(this._nc);
 
       console.info(`connected ${this._nc.getServer()}`);
     } catch (e) {
       console.error(e);
-      this.setErrorStatus(
-        i18n.t('notifications.nats-error-title'),
-        formatNatsError(e),
-      );
+      this.setErrorStatus(i18n.t('notifications.nats-error-title'), formatNatsError(e));
       return;
     }
 
     this._setRoomConnectionStatusState('receiving-data');
-    this._isRecorder = isUserRecorder(this.userId);
     this._js = jetstream(this._nc);
-    this.messageQueue.js(this._js);
+    this.messageQueue.setJs(this._js);
+    this.messageQueue.setIsConnected(true);
 
     // now change status to connected
     store.dispatch(updateIsNatsServerConnected(true));
     // start monitoring connection
     this.monitorConnStatus().then();
 
-    // now we'll subscribe to the system only
-    // others will be done after received initial data
-    this.subscribeToSystemPrivate().then();
-    this.subscribeToSystemPublic().then();
+    // initialize all subscriptions
+    this.subscriptionHandler.initializeSubscriptions();
 
     this.startTokenRenewInterval();
     this.startPingToServer();
@@ -198,90 +297,270 @@ export default class ConnectNats {
     );
   };
 
-  public endSession = async (msg: string) => {
-    if (this.mediaServerConn) {
-      await this.mediaServerConn.disconnectRoom(true);
-    }
+  public endSession = async (msg: string, backToMainRoom?: boolean) => {
+    // Hybrid mode: tell the native host to release its LiveKit publisher + media
+    // (no-op in a regular browser)
+    teardownNativePublisher();
 
+    // Immediately update UI and stop new messages
+    this.setErrorStatus(i18n.t('notifications.room-disconnected-title'), i18n.t(msg));
+    this.messageQueue.setIsConnected(false);
+    this._setRoomConnectionStatusState('disconnected');
+
+    // Clear all intervals to prevent further actions
+    if (this.pongMissedToastId) {
+      toast.dismiss(this.pongMissedToastId);
+      this.pongMissedToastId = undefined;
+    }
     clearInterval(this.tokenRenewInterval);
     clearInterval(this.pingInterval);
-    this.handleParticipants.clearParticipantCounterInterval();
-
-    if (this._nc && !this._nc.isClosed()) {
-      await this._nc.drain();
-      await this._nc.close();
+    clearInterval(this.reconciliationInterval);
+    clearInterval(this.statusCheckerInterval);
+    this.statusCheckerInterval = undefined;
+    if (this.toastIdConnecting) {
+      toast.dismiss(this.toastIdConnecting);
+      this.toastIdConnecting = undefined;
     }
-    this.messageQueue.isConnected(false);
+    this.subscriptionHandler.handleParticipants.clearParticipantCounterInterval();
 
-    this._setErrorState({
-      title: i18n.t('notifications.room-disconnected-title'),
-      text: i18n.t(msg),
-    });
-    this._setRoomConnectionStatusState('disconnected');
-    // clean audioActivityManager
-    audioActivityManager.destroy();
+    // Concurrently run all cleanup tasks.
+    const cleanupPromises: Promise<void>[] = [];
+    if (this.mediaServerConn) {
+      cleanupPromises.push(this.mediaServerConn.disconnectRoom(true));
+    }
+    if (this._nc && !this._nc.isClosed()) {
+      cleanupPromises.push(this._nc.close());
+    }
 
-    setTimeout(() => {
-      const meta = this._currentRoomInfo?.metadata;
-      if (meta?.isBreakoutRoom) {
-        // if this was breakout room then we can simply close
-        window.close();
+    if (msg === 'notifications.switching-room') {
+      // when back from breakout room to main room then we'll only do cleanup
+      // NOT: when we're going from main room to breakout room otherwise we'll lose data
+      if (backToMainRoom) {
+        cleanupPromises.push(deleteRoomDB());
       }
+    } else {
+      cleanupPromises.push(deleteRoomDB());
+    }
 
-      const logout_url = meta?.logoutUrl;
-      if (logout_url && logout_url !== '' && isURL(logout_url)) {
-        // redirect to log out url
-        window.location.href = logout_url;
+    cleanupPromises.push(getNotepadController().destroy());
+    cleanupPromises.push(getWhiteboardController().destroy());
+
+    await Promise.allSettled(cleanupPromises);
+
+    // Final resource cleanup
+    destroyAudioManager();
+
+    const meta = this._currentRoomInfo?.metadata;
+    // If we're inside a breakout room, try to auto-return to the main room
+    if (meta?.isBreakoutRoom && !backToMainRoom) {
+      const returned = await autoReturnToMainRoom();
+      if (returned) {
+        return;
+      }
+    }
+
+    // Handle post-session navigation after a delay
+    setTimeout(() => {
+      if (!meta?.isBreakoutRoom && meta?.logoutUrl && isValidHttpUrl(meta.logoutUrl)) {
+        window.location.replace(meta.logoutUrl);
       }
     }, 3000);
   };
 
+  public setErrorStatus(title: string, reason: string) {
+    this._setRoomConnectionStatusState('error');
+    this._setErrorState({
+      title: title,
+      text: reason,
+    });
+  }
+
+  public setRoomConnectionStatusState(status: roomConnectionStatus) {
+    this._setRoomConnectionStatusState(status);
+  }
+
+  private async monitorConnStatus() {
+    if (typeof this._nc === 'undefined') {
+      return;
+    }
+    const startStatusChecker = () => {
+      if (typeof this.statusCheckerInterval === 'undefined') {
+        this.statusCheckerInterval = setInterval(() => {
+          if (this._nc?.isClosed()) {
+            this.messageQueue.setIsConnected(false);
+            this.endSession('notifications.room-disconnected-network-error');
+
+            clearInterval(this.statusCheckerInterval);
+            this.statusCheckerInterval = undefined;
+            this.isRoomReconnecting = false;
+          }
+        }, STATUS_CHECKER_INTERVAL);
+      }
+    };
+
+    for await (const s of this._nc.status()) {
+      switch (s.type) {
+        case 'disconnect':
+        case 'staleConnection':
+        case 'close':
+          // when nats connection drops during that time, it disconnects first
+          // then start reconnecting, so we can set false here only
+          store.dispatch(updateIsNatsServerConnected(false));
+          this.messageQueue.setIsConnected(false);
+          if (s.type === 'staleConnection') {
+            await this._nc.close();
+          } else if (s.type === 'close') {
+            if (!this._nc.isClosed()) {
+              await this._nc.close();
+            }
+          }
+          break;
+        case 'reconnecting':
+          if (!this.isRoomReconnecting) {
+            this.toastIdConnecting = toast.loading(
+              i18n.t('notifications.room-disconnected-reconnecting'),
+              {
+                type: 'warning',
+                closeButton: false,
+                autoClose: false,
+              },
+            );
+            this.isRoomReconnecting = true;
+            startStatusChecker();
+          }
+          break;
+        case 'reconnect':
+        case 'forceReconnect':
+          if (this.toastIdConnecting) {
+            toast.dismiss(this.toastIdConnecting);
+            this.toastIdConnecting = undefined;
+          }
+          store.dispatch(updateIsNatsServerConnected(true));
+          this.messageQueue.setIsConnected(true);
+
+          clearInterval(this.statusCheckerInterval);
+          this.statusCheckerInterval = undefined;
+          this.isRoomReconnecting = false;
+          this.notifyReconnect();
+          break;
+        case 'slowConsumer':
+          toast(i18n.t('notifications.your-connection-quality-not-good'), {
+            type: 'warning',
+          });
+          break;
+      }
+    }
+  }
+
+  /**
+   * Sends a message to the system worker with guaranteed delivery.
+   * This method uses JetStream to ensure the message is received by the server.
+   * It is used for critical messages like PINGs, token renewals, and private data delivery.
+   * @param data The message to send.
+   */
   public sendMessageToSystemWorker = (data: NatsMsgClientToServer) => {
-    const subject =
-      this._subjects.systemJsWorker + '.' + this._roomId + '.' + this._userId;
+    const subject = this._subjects.systemJsWorker + '.' + this._roomId + '.' + this._userId;
+    this.messageQueue.addToQueue({
+      subject,
+      payload: toBinary(NatsMsgClientToServerSchema, data),
+      useJetStream: true,
+    });
+  };
+
+  /**
+   * Sends a message to the system worker over the lightweight core NATS pub/sub
+   * transport (fire-and-forget, no JetStream ack).
+   * @param data The message to send.
+   */
+  public sendMessageToCoreWorker = (data: NatsMsgClientToServer) => {
+    const subject = this._subjects.systemCoreWorker + '.' + this._roomId + '.' + this._userId;
     this.messageQueue.addToQueue({
       subject,
       payload: toBinary(NatsMsgClientToServerSchema, data),
     });
   };
 
-  public sendChatMsg = async (to: string, msg: string) => {
-    if (this._enableE2EEChat) {
-      try {
-        msg = await encryptMessage(msg);
-      } catch (e: any) {
-        store.dispatch(
-          addUserNotification({
-            message: 'Encryption error: ' + e.message,
-            typeOption: 'error',
+  private sendPrivateData(
+    payload: Uint8Array<ArrayBufferLike>,
+    type: PrivateDataDeliveryType,
+    toUserId: string,
+    echoToSender: boolean,
+  ) {
+    const msg = toJsonString(
+      PrivateDataDeliverySchema,
+      create(PrivateDataDeliverySchema, {
+        toUserId,
+        echoToSender,
+        type,
+      }),
+    );
+
+    this.sendMessageToSystemWorker(
+      create(NatsMsgClientToServerSchema, {
+        event: NatsMsgClientToServerEvents.REQ_PRIVATE_DATA_DELIVERY,
+        msg,
+        binMsg: payload,
+      }),
+    );
+  }
+
+  public async encryptData(payload: Uint8Array) {
+    try {
+      //  Encrypt the binary data directly to a Uint8Array
+      return await encryptDataToUint8Array(payload);
+    } catch (e: any) {
+      store.dispatch(
+        addUserNotification({
+          message: i18n.t('notifications.encryption-error', {
+            error: e.message,
           }),
-        );
-        console.error('Encryption error:' + e.message);
+          typeOption: 'error',
+        }),
+      );
+      console.error('Encryption error:' + e.message);
+    }
+    return undefined;
+  }
+
+  public async decryptData(payload: Uint8Array) {
+    try {
+      return await decryptDataFromUint8Array(payload);
+    } catch (e: any) {
+      store.dispatch(
+        addUserNotification({
+          message: i18n.t('notifications.decryption-error', {
+            error: e.message,
+          }),
+          typeOption: 'error',
+        }),
+      );
+      console.error('Decryption error:' + e.message);
+    }
+    return undefined;
+  }
+
+  private deliverChatMessage = async (chatMessage: ChatMessage) => {
+    let payload: Uint8Array = toBinary(ChatMessageSchema, chatMessage);
+
+    if (this._enableE2EEChat) {
+      const data = await this.encryptData(payload);
+      if (typeof data === 'undefined') {
         return;
       }
+      payload = data;
     }
 
-    const isPrivate = to !== 'public';
-    const now = Date.now().toString();
-    const data = create(ChatMessageSchema, {
-      id: now,
-      fromName: this._userName,
-      fromUserId: this._userId,
-      sentAt: now,
-      toUserId: to !== 'public' ? to : undefined,
-      isPrivate: isPrivate,
-      message: msg,
-      fromAdmin: this.isAdmin,
-    });
+    if (chatMessage.isPrivate) {
+      this.sendPrivateData(payload, 'CHAT', chatMessage.toUserId!, false);
+    } else {
+      const subject = `${this._subjects.chat}.${this._roomId}`;
+      this.messageQueue.addToQueue({
+        subject,
+        payload,
+      });
+    }
 
-    const subject =
-      this._roomId + ':' + this._subjects.chat + '.' + this._userId;
-    this.messageQueue.addToQueue({
-      subject,
-      payload: toBinary(ChatMessageSchema, data),
-    });
-
-    if (isPrivate) {
+    if (chatMessage.isPrivate) {
       this.sendAnalyticsData(
         AnalyticsEvents.ANALYTICS_EVENT_USER_PRIVATE_CHAT,
         AnalyticsEventType.USER,
@@ -298,48 +577,248 @@ export default class ConnectNats {
         '1',
       );
     }
+
+    // to add original message as own
+    await this.subscriptionHandler.handleChat.handleMsg(
+      create(ChatMessageSchema, { ...chatMessage }),
+    );
   };
 
-  public sendWhiteboardData = (
-    type: DataMsgBodyType,
+  /**
+   * Sends a new chat message. Translation applies to new messages only;
+   * edits/deletes reuse the original payload via deliverChatMessage.
+   */
+  public sendChatMsg = async (
+    to: string,
     msg: string,
-    to?: string,
+    meta?: Omit<ChatMeta, '$typeName' | '$unknown'>,
   ) => {
+    if (!this._nc || this._nc.isClosed()) {
+      return;
+    }
+
+    const isPrivate = to !== 'public';
+    const chatMessage = create(ChatMessageSchema, {
+      id: window.crypto.randomUUID(),
+      fromName: this._userName,
+      fromUserId: this._userId,
+      sentAt: Date.now().toString(),
+      toUserId: to !== 'public' ? to : undefined,
+      isPrivate: isPrivate,
+      message: msg,
+      fromAdmin: this.isAdmin,
+      meta: meta ? create(ChatMetaSchema, meta) : undefined,
+    });
+
+    // check translation settings
+    const state = store.getState();
+    const chatTranslationFeatures =
+      state.session.currentRoom?.metadata?.roomFeatures?.insightsFeatures?.chatTranslationFeatures;
+    if (chatTranslationFeatures && chatTranslationFeatures.isEnabled) {
+      // we'll get our selected lang
+      const selectedChatTransLang = state.roomSettings.selectedChatTransLang;
+      if (selectedChatTransLang !== '') {
+        try {
+          // we'll need to send request to get translation of selected lang
+          const body = create(InsightsTranslateTextReqSchema, {
+            text: chatMessage.message,
+            sourceLang: selectedChatTransLang,
+            targetLangs: chatTranslationFeatures.allowedTransLangs,
+          });
+          const res = await executeChatTranslation(body);
+          if (res.status && res.result) {
+            chatMessage.sourceLang = selectedChatTransLang;
+            chatMessage.translations = res.result.translations;
+          } else {
+            console.error(res.msg);
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    }
+
+    await this.deliverChatMessage(chatMessage);
+  };
+
+  public editChatMessage = async (original: ChatMessage, newHtmlMessage: string) => {
+    if (!this._nc || this._nc.isClosed()) {
+      return;
+    }
+    if (!canEditMessage(original, this._userId)) {
+      return;
+    }
+    const updated = create(ChatMessageSchema, {
+      ...original,
+      message: newHtmlMessage,
+      meta: create(ChatMetaSchema, {
+        replyToId: original.meta?.replyToId,
+        replyToName: original.meta?.replyToName,
+        replyToText: original.meta?.replyToText,
+        editedAt: Date.now().toString(),
+        isDeleted: false,
+      }),
+    });
+    await this.deliverChatMessage(updated);
+  };
+
+  public deleteChatMessage = async (
+    original: ChatMessage,
+    deleterUserId: string,
+    deleterIsAdmin: boolean,
+  ) => {
+    if (!this._nc || this._nc.isClosed()) {
+      return;
+    }
+    if (!canDeleteMessage(original, deleterUserId, deleterIsAdmin)) {
+      return;
+    }
+    const deletedByOther = original.fromUserId !== deleterUserId;
+    const updated = create(ChatMessageSchema, {
+      ...original,
+      message: '',
+      translations: {},
+      sourceLang: undefined,
+      meta: create(ChatMetaSchema, {
+        replyToId: original.meta?.replyToId,
+        replyToName: original.meta?.replyToName,
+        replyToText: original.meta?.replyToText,
+        editedAt: original.meta?.editedAt,
+        isDeleted: true,
+        deletedBy: deletedByOther ? deleterUserId : undefined,
+      }),
+    });
+    await this.deliverChatMessage(updated);
+  };
+
+  /**
+   * Sends whiteboard data as a fire-and-forget message on the whiteboard
+   * subject. Supports JSON control messages (`message`) and Yjs binary
+   * updates (`binMessage`). E2EE uses `_enableE2EEWhiteboard`.
+   */
+  public sendWhiteboardData = async (
+    type: DataMsgBodyType,
+    payload: {
+      message?: string;
+      binMessage?: Uint8Array;
+      id?: string;
+      to?: string;
+    } = {},
+  ) => {
+    if (!this._nc || this._nc.isClosed()) {
+      return;
+    }
+
     const data = create(DataChannelMessageSchema, {
       type,
+      id: payload.id,
       fromUserId: this._userId,
-      toUserId: to,
-      message: msg,
+      toUserId: payload.to,
+      message: payload.message,
+      binMessage: payload.binMessage,
     });
 
-    const subject =
-      this._roomId + ':' + this._subjects.whiteboard + '.' + this._userId;
-    this.messageQueue.addToQueue({
-      subject,
-      payload: toBinary(DataChannelMessageSchema, data),
+    let encoded: Uint8Array = toBinary(DataChannelMessageSchema, data);
+    if (this._enableE2EEWhiteboard) {
+      const enc = await this.encryptData(encoded);
+      if (typeof enc === 'undefined') {
+        return;
+      }
+      encoded = enc;
+    }
+
+    if (payload.to) {
+      this.sendPrivateData(encoded, 'WHITEBOARD_MSG', payload.to, false);
+    } else {
+      const subject = `${this._subjects.whiteboard}.${this._roomId}`;
+      this.messageQueue.addToQueue({ subject, payload: encoded });
+    }
+  };
+
+  /**
+   * Sends a generic data message.
+   * Private messages are sent via the system worker with JetStream's guaranteed delivery.
+   * Public messages are sent as fire-and-forget core NATS messages to the public data channel subject.
+   * Both are managed by the MessageQueue.
+   */
+  public sendDataMessage = async (type: DataMsgBodyType, msg: string, to?: string) => {
+    await this.publishData(type, {
+      message: msg,
+      to,
     });
   };
 
-  public sendDataMessage = (
+  /**
+   * Asks the earliest-joined peers to resend their current public chat
+   * snapshot (REQ_PUBLIC_CHAT_DATA). Responses merge via addAllChatMessages,
+   * which dedupes by id — so this is safe to call on demand (manual sync
+   * button) as well as on join. Useful when messages were missed because
+   * chat is peer-to-peer with no server store.
+   */
+  public requestPublicChatSync = async () => {
+    if (!this._nc || this._nc.isClosed()) {
+      return;
+    }
+    const donors = getChatDonors();
+    for (let i = 0; i < donors.length; i++) {
+      await this.sendDataMessage(DataMsgBodyType.REQ_PUBLIC_CHAT_DATA, '', donors[i].userId);
+    }
+  };
+
+  public publishData = async (
     type: DataMsgBodyType,
-    msg: string,
-    to?: string,
+    payload: {
+      message?: string;
+      binMessage?: Uint8Array;
+      id?: string;
+      to?: string;
+    } = {},
   ) => {
+    if (!this._nc || this._nc.isClosed()) {
+      return;
+    }
+
     const data = create(DataChannelMessageSchema, {
       type,
+      id: payload.id,
       fromUserId: this._userId,
-      toUserId: to,
-      message: msg,
+      toUserId: payload.to,
+      message: payload.message,
+      binMessage: payload.binMessage,
     });
 
-    const subject =
-      this._roomId + ':' + this._subjects.dataChannel + '.' + this._userId;
-    this.messageQueue.addToQueue({
-      subject,
-      payload: toBinary(DataChannelMessageSchema, data),
-    });
+    let encoded: Uint8Array = toBinary(DataChannelMessageSchema, data);
+    if (this._enableE2EE) {
+      const enc = await this.encryptData(encoded);
+      if (typeof enc === 'undefined') {
+        return;
+      }
+      encoded = enc;
+    }
+
+    if (payload.to) {
+      this.sendPrivateData(encoded, 'DATA_MSG', payload.to, false);
+    } else {
+      const subject = `${this._subjects.dataChannel}.${this._roomId}`;
+      this.messageQueue.addToQueue({ subject, payload: encoded });
+    }
   };
 
+  public onReconnect = (cb: () => void) => {
+    this.reconnectCallbacks.add(cb);
+    return () => {
+      this.reconnectCallbacks.delete(cb);
+    };
+  };
+
+  private notifyReconnect = () => {
+    this.reconnectCallbacks.forEach((cb) => cb());
+  };
+
+  /**
+   * Sends analytics data to the server as a lightweight, fire-and-forget message.
+   * This method uses the core NATS subject `systemCoreWorker` via the `MessageQueue`
+   */
   public sendAnalyticsData = (
     event_name: AnalyticsEvents,
     event_type: AnalyticsEventType = AnalyticsEventType.USER,
@@ -361,240 +840,14 @@ export default class ConnectNats {
       event: NatsMsgClientToServerEvents.PUSH_ANALYTICS_DATA,
       msg: toJsonString(AnalyticsDataMsgSchema, analyticsMsg),
     });
-    this.sendMessageToSystemWorker(data);
+
+    this.sendMessageToCoreWorker(data);
   };
-
-  private setErrorStatus(title: string, reason: string) {
-    this._setRoomConnectionStatusState('error');
-    this._setErrorState({
-      title: title,
-      text: reason,
-    });
-  }
-
-  private async monitorConnStatus() {
-    if (typeof this._nc === 'undefined') {
-      return;
-    }
-    const startStatusChecker = () => {
-      if (typeof this.statusCheckerInterval === 'undefined') {
-        this.statusCheckerInterval = setInterval(() => {
-          if (this._nc?.isClosed()) {
-            this.messageQueue.isConnected(false);
-            this.endSession('notifications.room-disconnected-network-error');
-
-            clearInterval(this.statusCheckerInterval);
-            this.statusCheckerInterval = undefined;
-            this.isRoomReconnecting = false;
-          }
-        }, STATUS_CHECKER_INTERVAL);
-      }
-    };
-
-    for await (const s of this._nc.status()) {
-      switch (s.type) {
-        case 'disconnect':
-          // when nats connection drops during that time, it disconnects first
-          // then start reconnecting, so we can set false here only
-          store.dispatch(updateIsNatsServerConnected(false));
-          break;
-        case 'reconnecting':
-          if (!this.isRoomReconnecting) {
-            this.toastIdConnecting = toast.loading(
-              i18n.t('notifications.room-disconnected-reconnecting'),
-              {
-                type: 'warning',
-                closeButton: false,
-                autoClose: false,
-              },
-            );
-            this.isRoomReconnecting = true;
-            startStatusChecker();
-          }
-          break;
-        case 'reconnect':
-          if (this.toastIdConnecting) {
-            toast.dismiss(this.toastIdConnecting);
-            this.toastIdConnecting = undefined;
-          }
-          store.dispatch(updateIsNatsServerConnected(true));
-
-          clearInterval(this.statusCheckerInterval);
-          this.statusCheckerInterval = undefined;
-          this.isRoomReconnecting = false;
-          break;
-      }
-    }
-  }
-
-  /**
-   * Subscribe to a stream
-   * @param streamName
-   * @param consumerNameSuffix
-   * @param handler
-   * @private
-   */
-  private async _subscribe(
-    streamName: string,
-    consumerNameSuffix: string,
-    handler: (m: JsMsg) => Promise<void>,
-  ) {
-    if (typeof this._js === 'undefined') {
-      return;
-    }
-    const consumerName = consumerNameSuffix + ':' + this._userId;
-    const consumer = await this._js.consumers.get(streamName, consumerName);
-    const sub = await consumer.consume();
-
-    for await (const m of sub) {
-      try {
-        await handler(m);
-        m.ack();
-      } catch (e) {
-        const err = e as Error;
-        console.error(err.message);
-        m.nak();
-      }
-    }
-  }
-
-  /**
-   * All the system private events will be handled here
-   * @private
-   */
-  private async subscribeToSystemPrivate() {
-    await this._subscribe(
-      this._roomId,
-      this._subjects.systemPrivate,
-      async (m) => {
-        const payload = fromBinary(NatsMsgServerToClientSchema, m.data);
-        if (payload.event === NatsMsgServerToClientEvents.SESSION_ENDED) {
-          m.ack(); // Ack early before session ends
-        }
-        await this.handleSystemEvents(payload);
-      },
-    );
-  }
-
-  /**
-   * All the system public events will be handled here
-   */
-  private subscribeToSystemPublic = async () => {
-    await this._subscribe(
-      this._roomId,
-      this._subjects.systemPublic,
-      async (m) => {
-        const payload = fromBinary(NatsMsgServerToClientSchema, m.data);
-        if (payload.event === NatsMsgServerToClientEvents.SESSION_ENDED) {
-          m.ack(); // Ack early before session ends
-        }
-        await this.handleSystemEvents(payload);
-      },
-    );
-  };
-
-  /**
-   * All the events related with chat will be handled here,
-   * including public and private
-   * Encrypted text will also be handled by HandleChat
-   */
-  private subscribeToChat = async () => {
-    await this._subscribe(this._roomId, this._subjects.chat, async (m) => {
-      const payload = fromBinary(ChatMessageSchema, m.data);
-      await this.handleChat.handleMsg(payload);
-    });
-  };
-
-  /**
-   * All the events related with whiteboard will be handled here
-   */
-  private subscribeToWhiteboard = async () => {
-    await this._subscribe(
-      this._roomId,
-      this._subjects.whiteboard,
-      async (m) => {
-        const payload = fromBinary(DataChannelMessageSchema, m.data);
-        if (payload.fromUserId !== this._userId) {
-          await this.handleWhiteboard.handleWhiteboardMsg(payload);
-        }
-      },
-    );
-  };
-
-  /**
-   * subscribeToDataChannel to communicate with each other
-   * Mostly with client to client
-   */
-  private subscribeToDataChannel = async () => {
-    await this._subscribe(
-      this._roomId,
-      this._subjects.dataChannel,
-      async (m) => {
-        const payload = fromBinary(DataChannelMessageSchema, m.data);
-        await this.handleDataMsg.handleMessage(payload);
-      },
-    );
-  };
-
-  /**
-   * systemEventHandlers maps will contain all the events both public and private
-   */
-  private readonly systemEventHandlers: {
-    [key in NatsMsgServerToClientEvents]?: (
-      payload: NatsMsgServerToClient,
-    ) => void | Promise<void>;
-  } = {
-    [NatsMsgServerToClientEvents.RES_INITIAL_DATA]: async (p) => {
-      await this.handleInitialData(p.msg);
-      this._setRoomConnectionStatusState('ready');
-    },
-    [NatsMsgServerToClientEvents.RES_JOINED_USERS_LIST]: (p) =>
-      this.handleJoinedUsersList(p.msg),
-    [NatsMsgServerToClientEvents.ROOM_METADATA_UPDATE]: (p) =>
-      this.handleRoomData.updateRoomMetadata(p.msg),
-    [NatsMsgServerToClientEvents.RESP_RENEW_PNM_TOKEN]: (p) => {
-      this._token = p.msg.toString();
-      store.dispatch(addToken(this._token));
-    },
-    [NatsMsgServerToClientEvents.SYSTEM_NOTIFICATION]: (p) => {
-      !this._isRecorder && this.handleSystemData.handleNotification(p.msg);
-    },
-    [NatsMsgServerToClientEvents.USER_JOINED]: (p) =>
-      this.handleParticipants.addRemoteParticipant(p.msg),
-    [NatsMsgServerToClientEvents.USER_DISCONNECTED]: (p) =>
-      this.handleParticipants.handleParticipantDisconnected(p.msg),
-    [NatsMsgServerToClientEvents.USER_OFFLINE]: (p) =>
-      this.handleParticipants.handleParticipantOffline(p.msg),
-    [NatsMsgServerToClientEvents.USER_METADATA_UPDATE]: (p) =>
-      this.handleParticipants.handleParticipantMetadataUpdate(p.msg),
-    [NatsMsgServerToClientEvents.AZURE_COGNITIVE_SERVICE_SPEECH_TOKEN]: (p) =>
-      this.handleSystemData.handleAzureToken(p.msg),
-    [NatsMsgServerToClientEvents.SESSION_ENDED]: (p) => this.endSession(p.msg),
-    [NatsMsgServerToClientEvents.POLL_CREATED]: (p) =>
-      this.handleSystemData.handlePoll(p),
-    [NatsMsgServerToClientEvents.POLL_CLOSED]: (p) =>
-      this.handleSystemData.handlePoll(p),
-    [NatsMsgServerToClientEvents.JOIN_BREAKOUT_ROOM]: (p) =>
-      this.handleSystemData.handleBreakoutRoom(p),
-    [NatsMsgServerToClientEvents.BREAKOUT_ROOM_ENDED]: (p) =>
-      this.handleSystemData.handleBreakoutRoom(p),
-    [NatsMsgServerToClientEvents.SYSTEM_CHAT_MSG]: (p) =>
-      this.handleSystemData.handleSysChatMsg(p.msg),
-  };
-
-  /**
-   * Handle system events
-   * @param payload
-   * @private
-   */
-  private async handleSystemEvents(payload: NatsMsgServerToClient) {
-    const handler = this.systemEventHandlers[payload.event];
-    if (handler) {
-      await handler(payload);
-    }
-  }
 
   private startTokenRenewInterval() {
+    if (this.tokenRenewInterval) {
+      return;
+    }
     this.tokenRenewInterval = setInterval(() => {
       this.sendMessageToSystemWorker(
         create(NatsMsgClientToServerSchema, {
@@ -605,113 +858,79 @@ export default class ConnectNats {
     }, RENEW_TOKEN_FREQUENT);
   }
 
+  public handlePong() {
+    this.missedPongs = 0;
+    if (this.pongMissedToastId) {
+      toast.dismiss(this.pongMissedToastId);
+      this.pongMissedToastId = undefined;
+    }
+  }
+
   private startPingToServer() {
-    const ping = () => {
-      this.sendMessageToSystemWorker(
+    if (this.pingInterval) {
+      // Already running, no need to start another.
+      return;
+    }
+    const ping = async () => {
+      if (this.missedPongs === 6) {
+        this.pongMissedToastId = toast.loading(i18n.t('notifications.server-not-responding'), {
+          type: 'warning',
+          closeButton: false,
+          autoClose: false,
+        });
+      } else if (this.missedPongs >= MAX_MISSED_PONGS) {
+        await this.endSession('notifications.room-disconnected-server-unresponsive');
+        return;
+      }
+
+      this.sendMessageToCoreWorker(
         create(NatsMsgClientToServerSchema, {
           event: NatsMsgClientToServerEvents.PING,
         }),
       );
+      this.missedPongs++;
     };
-    this.pingInterval = setInterval(() => {
-      ping();
-    }, PING_INTERVAL);
+    this.pingInterval = setInterval(ping, PING_INTERVAL);
     // start instantly
-    ping();
+    void ping();
   }
 
-  private async handleInitialData(msg: string) {
-    let data: NatsInitialData;
-    try {
-      data = fromJsonString(NatsInitialDataSchema, msg);
-    } catch (e: any) {
-      console.error(e);
-      this.setErrorStatus(
-        i18n.t('notifications.decode-error-title'),
-        i18n.t('decode-error-body'),
-      );
+  public startUsersSync = () => {
+    if (this.reconciliationInterval) {
       return;
     }
-
-    // add room info first
-    if (data.room) {
-      this._currentRoomInfo = await this.handleRoomData.setRoomInfo(data.room);
-    }
-
-    // now local user
-    if (data.localUser) {
-      this._isAdmin = data.localUser.isAdmin;
-      const localUser = await this.handleParticipants.addLocalParticipantInfo(
-        data.localUser,
+    this.reconciliationInterval = setInterval(() => {
+      this.sendMessageToCoreWorker(
+        create(NatsMsgClientToServerSchema, {
+          event: NatsMsgClientToServerEvents.REQ_ONLINE_USERS_LIST,
+        }),
       );
-      this._userName = localUser.name;
-    }
-
-    // media info
-    if (data.mediaServerInfo) {
-      const success = await this.createMediaServerConn(data.mediaServerInfo);
-      if (!success) {
-        // if not success, then we won't do anything else
-        return;
-      }
-    }
-
-    // now request for users' list
-    this.sendMessageToSystemWorker(
-      create(NatsMsgClientToServerSchema, {
-        event: NatsMsgClientToServerEvents.REQ_JOINED_USERS_LIST,
-      }),
-    );
-
-    // now subscribe to other channels
-    // some of those services need user or room info
-    // without proper data will give unexpected results,
-    // for example, if E2EE is enabled then key will require
-    // for chat or whiteboard
-    this.subscribeToChat().then();
-    this.subscribeToWhiteboard().then();
-    this.subscribeToDataChannel().then();
-  }
-
-  private async handleJoinedUsersList(msg: string) {
-    try {
-      const onlineUsers: string[] = JSON.parse(msg);
-      for (let i = 0; i < onlineUsers.length; i++) {
-        const user = fromJson(NatsKvUserInfoSchema, onlineUsers[i]);
-        await this.handleParticipants.addRemoteParticipant(user);
-      }
-      await this.onAfterUserReady();
-    } catch (e) {
-      console.error(e);
-    }
-  }
+    }, USERS_SYNC_INTERVAL);
+  };
 
   /**
-   * This method should call when the current user is ready
-   * with an initial data and users list
+   * Requests media server data to establish the media connection.
+   * Call only when ready to join — the media token may expire if requested too early.
    */
-  private async onAfterUserReady() {
-    const donors = getWhiteboardDonors();
-    for (let i = 0; i < donors.length; i++) {
-      this.sendDataMessage(
-        DataMsgBodyType.REQ_FULL_WHITEBOARD_DATA,
-        '',
-        donors[i].userId,
-      );
-    }
-  }
+  public requestMediaServerData = () => {
+    if (this._mediaServerDataRequested) return;
+    this._mediaServerDataRequested = true;
 
-  private async createMediaServerConn(connInfo: MediaServerConnInfo) {
+    this.sendMessageToSystemWorker(
+      create(NatsMsgClientToServerSchema, {
+        event: NatsMsgClientToServerEvents.REQ_MEDIA_SERVER_DATA,
+      }),
+    );
+  };
+
+  public async initializeMediaServer(
+    e2ee: EndToEndEncryptionFeatures | undefined,
+    roomSid: string,
+  ) {
     if (typeof this._mediaServerConn !== 'undefined') {
       return false;
     }
-    const info: LivekitInfo = {
-      livekit_host: connInfo.url,
-      token: connInfo.token,
-    };
-
-    const e2ee =
-      this._currentRoomInfo?.metadata?.roomFeatures?.endToEndEncryptionFeatures;
+    let encryptionKey: string | undefined = undefined;
 
     if (e2ee && e2ee.isEnabled) {
       if (!isE2EESupported()) {
@@ -720,42 +939,39 @@ export default class ConnectNats {
           i18n.t('notifications.e2ee-unsupported-browser-msg'),
         );
         return false;
+      }
+
+      encryptionKey = e2ee.encryptionKey;
+      if (e2ee.enabledSelfInsertEncryptionKey) {
+        encryptionKey = store.getState().roomSettings.selfInsertedE2EESecretKey;
+        // clean as soon as we've done with it
+        store.dispatch(addSelfInsertedE2EESecretKey(''));
+      }
+
+      if (encryptionKey) {
+        await importSecretKeyFromPlainText(encryptionKey, roomSid);
+
+        this._enableE2EE = true;
+        this._enableE2EEChat = e2ee.includedChatMessages;
+        this._enableE2EEWhiteboard = e2ee.includedWhiteboard;
       } else {
-        let encryptionKey = e2ee.encryptionKey;
-        if (e2ee.enabledSelfInsertEncryptionKey) {
-          encryptionKey =
-            store.getState().roomSettings.selfInsertedE2EESecretKey;
-        }
-
-        if (encryptionKey) {
-          this._enableE2EEChat = e2ee.includedChatMessages;
-          if (e2ee.enabledSelfInsertEncryptionKey) {
-            await importSecretKeyFromMaterial(encryptionKey);
-          } else {
-            await importSecretKeyFromPlainText(encryptionKey);
-          }
-
-          info.encryption_key = encryptionKey;
-          info.enabledE2EE = true;
-        } else {
-          this.setErrorStatus(
-            i18n.t('notifications.e2ee-invalid-key-title'),
-            i18n.t('notifications.e2ee-invalid-key-msg'),
-          );
-          return false;
-        }
+        this.setErrorStatus(
+          i18n.t('notifications.e2ee-invalid-key-title'),
+          i18n.t('notifications.e2ee-invalid-key-msg'),
+        );
+        return false;
       }
     }
 
-    const conn = createLivekitConnection(
-      info,
+    this._mediaServerConn = createLivekitConnection(
       this._setErrorState,
       this._setRoomConnectionStatusState,
       this._userId,
+      this._enableE2EE,
+      encryptionKey,
     );
 
-    this._setCurrentMediaServerConn(conn);
-    this._mediaServerConn = conn;
+    this._setCurrentMediaServerConn(this._mediaServerConn);
     return true;
   }
 }

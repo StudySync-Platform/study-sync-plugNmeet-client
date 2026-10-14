@@ -10,13 +10,7 @@ interface IConfirmationModalProps {
   text: string;
 }
 
-const ConfirmationModal = ({
-  show,
-  onClose,
-  onConfirm,
-  title,
-  text,
-}: IConfirmationModalProps) => {
+const ConfirmationModal = ({ show, onClose, onConfirm, title, text }: IConfirmationModalProps) => {
   const { t } = useTranslation();
 
   const renderButtons = () => (
@@ -29,7 +23,7 @@ const ConfirmationModal = ({
       </button>
       <button
         type="button"
-        className="h-10 px-5 w-32 flex items-center justify-center text-sm 3xl:text-base font-semibold bg-primary-color hover:bg-white border border-[#0088CC] rounded-[15px] text-white hover:text-Gray-950 transition-all duration-300 shadow-button-shadow cursor-pointer"
+        className="primary-button h-10 px-5 w-32 flex items-center justify-center text-sm 3xl:text-base font-semibold bg-Blue hover:bg-white border border-[#0088CC] rounded-[15px] text-white hover:text-Gray-950 transition-all duration-300 shadow-button-shadow cursor-pointer"
         onClick={onClose}
       >
         {t('close')}
@@ -38,13 +32,8 @@ const ConfirmationModal = ({
   );
 
   return (
-    <Modal
-      show={show}
-      onClose={onClose}
-      title={title}
-      renderButtons={renderButtons}
-    >
-      <p className="text-sm text-Gray-900">{text}</p>
+    <Modal show={show} onClose={onClose} title={title} renderButtons={renderButtons}>
+      <p className="text-sm text-Gray-900 dark:text-white">{text}</p>
     </Modal>
   );
 };

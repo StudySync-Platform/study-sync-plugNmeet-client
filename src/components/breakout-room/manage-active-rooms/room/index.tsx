@@ -1,10 +1,6 @@
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import {
-  Disclosure,
-  DisclosureButton,
-  DisclosurePanel,
-} from '@headlessui/react';
+import { Disclosure, DisclosureButton, DisclosurePanel } from '@headlessui/react';
 import { useTranslation } from 'react-i18next';
 import { BreakoutRoom } from 'plugnmeet-protocol-js';
 
@@ -26,15 +22,15 @@ const RoomItem = ({ room, setMessage }: RoomItemProps) => {
   return (
     <Disclosure as="div">
       {({ open }) => (
-        <div className="bg-Gray-50 rounded-xl border border-gray-300 overflow-hidden w-full">
+        <div className="bg-Gray-50 dark:bg-dark-primary rounded-xl border border-gray-300 dark:border-gray-800 overflow-hidden w-full">
           <DisclosureButton
-            className={`flex items-center justify-between gap-3 w-full pl-[14px] pr-2 bg-white h-9 rounded-xl  shadow-button-shadow transition-all duration-300 ${
-              open ? 'border-b border-gray-300' : ''
+            className={`flex items-center justify-between gap-3 w-full ps-[14px] pe-2 bg-white dark:bg-dark-secondary3 h-9 rounded-xl shadow-button-shadow dark:shadow-none transition-all duration-300 cursor-pointer ${
+              open ? 'border-b border-gray-300 dark:border-gray-800' : ''
             }`}
           >
-            <span className="text-sm text-Gray-800">{room.title}</span>
+            <span className="text-sm text-Gray-800 dark:text-white">{room.title}</span>
             <div className="right flex items-center gap-2">
-              <div className="wrap text-sm font-semibold text-Gray-950">
+              <div className="wrap text-sm font-semibold text-Gray-950 dark:text-white">
                 {room.started ? (
                   <BreakoutRoomDuration
                     duration={BigInt(room.duration)}
@@ -82,19 +78,10 @@ const RoomItem = ({ room, setMessage }: RoomItemProps) => {
                 <div className="wrap relative rounded-xl overflow-auto">
                   <div className="inner p-5">
                     <div className="row flex flex-wrap items-center justify-between mb-4">
-                      <ExtendDuration
-                        breakoutRoomId={room.id}
-                        setMessage={setMessage}
-                      />
+                      <ExtendDuration breakoutRoomId={room.id} setMessage={setMessage} />
                       <div className="row flex mb-2">
-                        <JoinBtn
-                          breakoutRoomId={room.id}
-                          setMessage={setMessage}
-                        />
-                        <EndBtn
-                          breakoutRoomId={room.id}
-                          setMessage={setMessage}
-                        />
+                        <JoinBtn breakoutRoomId={room.id} setMessage={setMessage} />
+                        <EndBtn breakoutRoomId={room.id} setMessage={setMessage} />
                       </div>
                     </div>
                     <BreakoutRoomUsers

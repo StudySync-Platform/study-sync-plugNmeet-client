@@ -18,13 +18,11 @@ const useDisplayExternalLink = () => {
   const { t } = useTranslation();
   const isActiveDisplayExternalLink = useAppSelector(
     (state) =>
-      state.session.currentRoom.metadata?.roomFeatures
-        ?.displayExternalLinkFeatures?.isActive,
+      state.session.currentRoom.metadata?.roomFeatures?.displayExternalLinkFeatures?.isActive,
   );
   const isActiveExternalMediaPlayer = useAppSelector(
     (state) =>
-      state.session.currentRoom.metadata?.roomFeatures
-        ?.externalMediaPlayerFeatures?.isActive,
+      state.session.currentRoom.metadata?.roomFeatures?.externalMediaPlayerFeatures?.isActive,
   );
 
   const toggleDisplayExternalLinkModal = useCallback(async () => {
@@ -67,6 +65,8 @@ const useDisplayExternalLink = () => {
       });
     } else {
       toast.dismiss(id);
+      // open modal to let user select new link
+      dispatch(updateDisplayExternalLinkRoomModal(true));
     }
   }, [isActiveDisplayExternalLink, isActiveExternalMediaPlayer, dispatch, t]);
 

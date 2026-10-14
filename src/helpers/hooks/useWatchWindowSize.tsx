@@ -1,145 +1,177 @@
-import { useEffect, useState, useRef } from 'react';
-import MobileDetect from 'mobile-detect';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { debounce } from 'es-toolkit';
 import type { Room } from 'livekit-client';
+import MobileDetect from 'mobile-detect';
 import NoSleep from 'nosleep.js';
 
 import {
+  setActiveSidePanel,
   updateDeviceOrientation,
-  updateIsActiveChatPanel,
-  updateIsActiveParticipantsPanel,
   updateScreenHeight,
   updateScreenWidth,
 } from '../../store/slices/bottomIconsActivitySlice';
 import { store, useAppDispatch } from '../../store';
 import { updateUserDeviceType } from '../../store/slices/sessionSlice';
 import { UserDeviceType } from '../../store/slices/interfaces/session';
-import useStorePreviousInt from './useStorePreviousInt';
-import { doRefreshWhiteboard } from '../../store/slices/whiteboard';
+import { triggerRefreshWhiteboard } from '../../store/slices/whiteboard';
+
+const RESIZE_DEBOUNCE_DELAY_MS = 150;
+const SCREEN_HEIGHT_DEBOUNCE_DELAY_MS = 500;
+const SIDE_PANEL_BREAKPOINT_PX = 1024;
 
 const useWatchWindowSize = (currentRoom: Room | undefined) => {
   const dispatch = useAppDispatch();
-  const noSleep = new NoSleep();
-  const initialRef = useRef(false);
+  const noSleepRef = useRef<NoSleep | null>(null);
+  const prevWidthRef = useRef(window.innerWidth);
 
   const [deviceClass, setDeviceClass] = useState<string>('');
-  const [orientationClass, setOrientationClass] =
-    useState<string>('landscape-device');
+  const [orientationClass, setOrientationClass] = useState<string>('landscape-device');
   const [screenHeight, setScreenHeight] = useState<string>('');
-  const [screenWidth, setScreenWidth] = useState<number>(0);
-  const preScreenWidth = useStorePreviousInt(screenWidth);
 
-  const adjustScreenSize = () => {
+  const adjustScreenSize = useCallback(() => {
     setScreenHeight(`${window.innerHeight}px`);
-  };
+  }, []);
+
+  const debouncedAdjustScreenSize = useMemo(
+    () => debounce(adjustScreenSize, SCREEN_HEIGHT_DEBOUNCE_DELAY_MS),
+    [adjustScreenSize],
+  );
+
+  const debouncedDispatchWidth = useMemo(
+    () =>
+      debounce((width: number) => {
+        dispatch(updateScreenWidth(width));
+
+        const isActiveWhiteboard = store.getState().bottomIconsActivity.isActiveWhiteboard;
+
+        if (isActiveWhiteboard) {
+          dispatch(triggerRefreshWhiteboard());
+        }
+      }, RESIZE_DEBOUNCE_DELAY_MS),
+    [dispatch],
+  );
 
   useEffect(() => {
-    const timeout = setTimeout(() => {
-      adjustScreenSize();
-    }, 500);
+    debouncedAdjustScreenSize();
+
     return () => {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
+      debouncedAdjustScreenSize.cancel();
     };
-  }, [currentRoom?.state]);
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies
+  }, [debouncedAdjustScreenSize, currentRoom?.state]);
 
   useEffect(() => {
-    if (preScreenWidth && preScreenWidth !== screenWidth) {
-      dispatch(updateScreenWidth(window.innerWidth));
-      if (store.getState().bottomIconsActivity.isActiveWhiteboard) {
-        dispatch(doRefreshWhiteboard());
-      }
-    }
-    //eslint-disable-next-line
-  }, [preScreenWidth, screenWidth]);
-
-  useEffect(() => {
-    if (initialRef.current) {
-      return;
-    }
-    initialRef.current = true;
-
-    window.addEventListener('resize', () => {
-      setScreenWidth(window.innerWidth);
-      dispatch(updateScreenHeight(window.innerHeight));
+    const handleResize = (width: number, height: number) => {
+      dispatch(updateScreenHeight(height));
       adjustScreenSize();
+      debouncedDispatchWidth(width);
 
-      const isActiveChatPanel =
-        store.getState().bottomIconsActivity.isActiveChatPanel;
-      const isActiveParticipantsPanel =
-        store.getState().bottomIconsActivity.isActiveParticipantsPanel;
+      const activeSidePanel = store.getState().bottomIconsActivity.activeSidePanel;
+
       if (
-        window.innerWidth < 1024 &&
-        isActiveChatPanel &&
-        isActiveParticipantsPanel
+        prevWidthRef.current >= SIDE_PANEL_BREAKPOINT_PX &&
+        width < SIDE_PANEL_BREAKPOINT_PX &&
+        activeSidePanel
       ) {
-        // if both open better to close one
-        dispatch(updateIsActiveParticipantsPanel(false));
+        dispatch(setActiveSidePanel(null));
       }
+      prevWidthRef.current = width;
+    };
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0];
+
+      if (!entry) {
+        return;
+      }
+
+      const { width, height } = entry.contentRect;
+
+      handleResize(Math.round(width), Math.round(height));
     });
 
-    setScreenWidth(window.innerWidth);
-    dispatch(updateScreenWidth(window.innerWidth));
+    resizeObserver.observe(document.body);
+
     dispatch(updateScreenHeight(window.innerHeight));
 
-    if (window.innerWidth < 1024) {
-      dispatch(updateIsActiveParticipantsPanel(false));
-      dispatch(updateIsActiveChatPanel(false));
+    // Runs once on mount; only closes the side panel on initial load if the
+    // viewport starts below the breakpoint. Height-only changes (soft keyboard)
+    // are handled separately above and won't trigger a close here.
+    if (window.innerWidth < SIDE_PANEL_BREAKPOINT_PX) {
+      dispatch(setActiveSidePanel(null));
     }
 
-    let deviceClass = 'is-pc',
-      isSmallDevice = false;
+    return () => {
+      debouncedDispatchWidth.cancel();
+      resizeObserver.disconnect();
+    };
+  }, [adjustScreenSize, debouncedDispatchWidth, dispatch]);
+
+  useEffect(() => {
     const md = new MobileDetect(window.navigator.userAgent);
-    const isIpad =
-      /Macintosh/i.test(window.navigator.userAgent) &&
-      navigator.maxTouchPoints &&
-      navigator.maxTouchPoints > 1;
+
+    const isIpad = /Macintosh/i.test(window.navigator.userAgent) && navigator.maxTouchPoints > 1;
+
+    const classes: string[] = [];
+    let isSmallDevice = false;
 
     if (isIpad || md.tablet()) {
-      deviceClass = 'is-tablet ';
+      classes.push('is-tablet');
       isSmallDevice = true;
       dispatch(updateUserDeviceType(UserDeviceType.TABLET));
     } else if (md.mobile()) {
-      deviceClass = 'is-mobile ';
+      classes.push('is-mobile');
       isSmallDevice = true;
       dispatch(updateUserDeviceType(UserDeviceType.MOBILE));
-    }
-
-    if (isSmallDevice) {
-      // Prevent display sleep for mobile devices
-      noSleep.enable().then();
+    } else {
+      classes.push('is-pc');
     }
 
     const os = md.os();
+
     if (os === 'AndroidOS') {
-      deviceClass += 'is-android';
-    } else if (os === 'iOS' || os === 'iPadOS') {
-      deviceClass += 'is-ios';
-    } else if (!os && isIpad) {
-      deviceClass += 'is-ios';
-    }
-    setDeviceClass(deviceClass);
-
-    const mql = window.matchMedia('(orientation: portrait)');
-    if (mql.matches) {
-      setOrientationClass('portrait-device');
-      dispatch(updateDeviceOrientation('portrait'));
-    } else {
-      setOrientationClass('landscape-device');
-      dispatch(updateDeviceOrientation('landscape'));
+      classes.push('is-android');
+    } else if (os === 'iOS' || os === 'iPadOS' || (!os && isIpad)) {
+      classes.push('is-ios');
     }
 
-    mql.addEventListener('change', (m) => {
-      if (m.matches) {
-        setOrientationClass('portrait-device');
-        dispatch(updateDeviceOrientation('portrait'));
-      } else {
-        setOrientationClass('landscape-device');
-        dispatch(updateDeviceOrientation('landscape'));
+    setDeviceClass(classes.join(' '));
+
+    if (isSmallDevice) {
+      if (!noSleepRef.current) {
+        noSleepRef.current = new NoSleep();
       }
-    });
-    //eslint-disable-next-line
-  }, []);
+
+      void noSleepRef.current.enable();
+    }
+
+    return () => {
+      noSleepRef.current?.disable();
+    };
+  }, [dispatch]);
+
+  useEffect(() => {
+    const mediaQueryList = window.matchMedia('(orientation: portrait)');
+
+    const applyOrientation = (isPortrait: boolean) => {
+      const nextOrientation = isPortrait ? 'portrait' : 'landscape';
+
+      setOrientationClass(`${nextOrientation}-device`);
+      dispatch(updateDeviceOrientation(nextOrientation));
+    };
+
+    const handleOrientationChange = (event: MediaQueryListEvent) => {
+      applyOrientation(event.matches);
+    };
+
+    applyOrientation(mediaQueryList.matches);
+
+    mediaQueryList.addEventListener('change', handleOrientationChange);
+
+    return () => {
+      mediaQueryList.removeEventListener('change', handleOrientationChange);
+    };
+  }, [dispatch]);
 
   return {
     deviceClass,

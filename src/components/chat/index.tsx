@@ -29,12 +29,10 @@ const ChatComponent = () => {
     (state) => state.session.currentUser?.metadata?.lockSettings?.lockChat,
   );
   const isLockChatSendMessage = useAppSelector(
-    (state) =>
-      state.session.currentUser?.metadata?.lockSettings?.lockChatSendMessage,
+    (state) => state.session.currentUser?.metadata?.lockSettings?.lockChatSendMessage,
   );
   const isLockChatFileShare = useAppSelector(
-    (state) =>
-      state.session.currentUser?.metadata?.lockSettings?.lockChatFileShare,
+    (state) => state.session.currentUser?.metadata?.lockSettings?.lockChatFileShare,
   );
   const defaultLockSettings = useAppSelector(
     (state) => state.session.currentRoom.metadata?.defaultLockSettings,
@@ -65,13 +63,7 @@ const ChatComponent = () => {
 
     // A non-admin can chat if neither the chat feature nor message sending is locked.
     return !finalChatLockStatus && !finalMsgSendLockStatus;
-  }, [
-    isRecorder,
-    isAdmin,
-    isChatLocked,
-    isLockChatSendMessage,
-    defaultLockSettings,
-  ]);
+  }, [isRecorder, isAdmin, isChatLocked, isLockChatSendMessage, defaultLockSettings]);
 
   const handleOnDrop = (e: DragEvent) => {
     e.preventDefault();
@@ -89,14 +81,13 @@ const ChatComponent = () => {
           RoomUploadedFileType.CHAT_FILE,
           files,
           (result) => {
-            publishFileAttachmentToChat(result.filePath, result.fileName).then(
-              () =>
-                dispatch(
-                  addUserNotification({
-                    message: t('right-panel.file-upload-success'),
-                    typeOption: 'success',
-                  }),
-                ),
+            publishFileAttachmentToChat(result.filePath, result.fileName).then(() =>
+              dispatch(
+                addUserNotification({
+                  message: t('right-panel.file-upload-success'),
+                  typeOption: 'success',
+                }),
+              ),
             );
           },
         );
@@ -104,33 +95,24 @@ const ChatComponent = () => {
     }
   };
 
-return (
-  <div
-    className="relative flex flex-col h-full bg-white border-l border-gray-200"
-    onDrop={handleOnDrop}
-    onDragOver={(e) => e.preventDefault()}
-  >
-    {/* Header */}
-    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white">
-      <h3 className="text-sm font-medium text-gray-900">Session Chat</h3>
-    </div>
-
-    {/* Messages + Tabs */}
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex-1 overflow-y-auto">
-        <ChatTabs />
+  return (
+    <div
+      className="side-panel-bg-color z-10 w-full bg-Gray-25 dark:bg-dark-primary border-l border-Gray-200 dark:border-Gray-800 h-full flex flex-col"
+      onDrop={handleOnDrop}
+      onDragOver={(e) => e.preventDefault()}
+    >
+      <div className="flex-1 min-h-0">
+        <div className="all-MessageModule-wrap h-full">
+          <ChatTabs isRecorder={isRecorder} />
+        </div>
       </div>
+      {canShowChatInput && (
+        <div className="side-panel-bg-color message-form border-t border-Gray-200 dark:border-Gray-800 bg-white dark:bg-dark-secondary w-full px-3 3xl:px-5 py-2 3xl:py-4 flex items-center">
+          <TextBoxArea />
+        </div>
+      )}
     </div>
-
-    {/* Input */}
-    {canShowChatInput && (
-      <div className="border-t border-gray-200 bg-white px-4 py-3">
-        <TextBoxArea />
-      </div>
-    )}
-  </div>
-);
-
+  );
 };
 
 export default ChatComponent;

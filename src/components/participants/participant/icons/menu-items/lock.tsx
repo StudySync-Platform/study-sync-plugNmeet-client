@@ -1,12 +1,9 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { MenuItem } from '@headlessui/react';
 import { toast } from 'react-toastify';
 import { useTranslation } from 'react-i18next';
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
-import {
-  CommonResponseSchema,
-  UpdateUserLockSettingsReqSchema,
-} from 'plugnmeet-protocol-js';
+import { CommonResponseSchema, UpdateUserLockSettingsReqSchema } from 'plugnmeet-protocol-js';
 
 import { store, useAppSelector } from '../../../../../store';
 import { participantsSelector } from '../../../../../store/slices/participantSlice';
@@ -29,17 +26,25 @@ const serviceToLockSettingMap: Record<
   chat: 'lockChat',
   sendChatMsg: 'lockChatSendMessage',
   chatFile: 'lockChatFileShare',
+  reactions: 'lockReactions',
 };
 
 const LockSettingMenuItem = ({ userId }: ILockSettingMenuItemProps) => {
-  const session = store.getState().session;
-  const roomFeatures = session.currentRoom.metadata?.roomFeatures;
   const { t } = useTranslation();
   const [isBusy, setIsBusy] = useState<boolean>(false);
 
+  // all static values
+  const { roomId, sid, roomFeatures } = useMemo(() => {
+    const session = store.getState().session;
+    return {
+      roomId: session.currentRoom.roomId,
+      sid: session.currentRoom.sid,
+      roomFeatures: session.currentRoom.metadata?.roomFeatures,
+    };
+  }, []);
+
   const lockSettings = useAppSelector(
-    (state) =>
-      participantsSelector.selectById(state, userId)?.metadata?.lockSettings,
+    (state) => participantsSelector.selectById(state, userId)?.metadata?.lockSettings,
   );
 
   const toggleLockSetting = useCallback(
@@ -54,8 +59,8 @@ const LockSettingMenuItem = ({ userId }: ILockSettingMenuItemProps) => {
       const direction = isLocked ? 'unlock' : 'lock';
 
       const body = create(UpdateUserLockSettingsReqSchema, {
-        roomSid: session.currentRoom.sid,
-        roomId: session.currentRoom.roomId,
+        roomSid: sid,
+        roomId: roomId,
         userId: userId,
         service: task,
         direction,
@@ -82,8 +87,7 @@ const LockSettingMenuItem = ({ userId }: ILockSettingMenuItemProps) => {
       }
       setIsBusy(false);
     },
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
-    [isBusy, lockSettings],
+    [userId, sid, roomId, t, isBusy, lockSettings],
   );
 
   const lockableFeatures = [
@@ -96,8 +100,7 @@ const LockSettingMenuItem = ({ userId }: ILockSettingMenuItemProps) => {
     },
     {
       key: 'webcam',
-      isDisplayed:
-        roomFeatures?.allowWebcams && !roomFeatures?.adminOnlyWebcams,
+      isDisplayed: roomFeatures?.allowWebcams && !roomFeatures?.adminOnlyWebcams,
       isLocked: lockSettings?.lockWebcam,
       lockText: t('left-panel.menus.items.lock-webcam'),
       unlockText: t('left-panel.menus.items.unlock-webcam'),
@@ -111,28 +114,28 @@ const LockSettingMenuItem = ({ userId }: ILockSettingMenuItemProps) => {
     },
     {
       key: 'whiteboard',
-      isDisplayed: roomFeatures?.whiteboardFeatures?.allowedWhiteboard,
+      isDisplayed: roomFeatures?.whiteboardFeatures?.isAllow,
       isLocked: lockSettings?.lockWhiteboard,
       lockText: t('left-panel.menus.items.lock-whiteboard'),
       unlockText: t('left-panel.menus.items.unlock-whiteboard'),
     },
     {
       key: 'sharedNotepad',
-      isDisplayed: roomFeatures?.sharedNotePadFeatures?.allowedSharedNotePad,
+      isDisplayed: roomFeatures?.sharedNotePadFeatures?.isAllow,
       isLocked: lockSettings?.lockSharedNotepad,
       lockText: t('left-panel.menus.items.lock-shared-notepad'),
       unlockText: t('left-panel.menus.items.unlock-shared-notepad'),
     },
     {
       key: 'chat',
-      isDisplayed: roomFeatures?.chatFeatures?.allowChat,
+      isDisplayed: roomFeatures?.chatFeatures?.isAllow,
       isLocked: lockSettings?.lockChat,
       lockText: t('left-panel.menus.items.lock-chat'),
       unlockText: t('left-panel.menus.items.unlock-chat'),
     },
     {
       key: 'sendChatMsg',
-      isDisplayed: roomFeatures?.chatFeatures?.allowChat,
+      isDisplayed: roomFeatures?.chatFeatures?.isAllow,
       isLocked: lockSettings?.lockChatSendMessage,
       lockText: t('left-panel.menus.items.lock-send-chat-message'),
       unlockText: t('left-panel.menus.items.unlock-send-chat-message'),
@@ -140,34 +143,36 @@ const LockSettingMenuItem = ({ userId }: ILockSettingMenuItemProps) => {
     {
       key: 'chatFile',
       isDisplayed:
-        roomFeatures?.chatFeatures?.allowChat &&
-        roomFeatures?.chatFeatures?.allowFileUpload,
+        roomFeatures?.chatFeatures?.isAllow && roomFeatures?.chatFeatures?.isAllowFileUpload,
       isLocked: lockSettings?.lockChatFileShare,
       lockText: t('left-panel.menus.items.lock-send-file'),
       unlockText: t('left-panel.menus.items.unlock-send-file'),
     },
+    {
+      key: 'reactions',
+      isDisplayed: roomFeatures?.allowReactions !== false,
+      isLocked: lockSettings?.lockReactions,
+      lockText: t('left-panel.menus.items.lock-reaction'),
+      unlockText: t('left-panel.menus.items.unlock-reaction'),
+    },
   ];
 
-  return (
-    <>
-      {lockableFeatures.map(
-        (feature) =>
-          feature.isDisplayed && (
-            <div className="" role="none" key={feature.key}>
-              <MenuItem>
-                {() => (
-                  <button
-                    className="min-h-8 cursor-pointer py-0.5 w-full text-sm text-left leading-none font-medium text-Gray-950 px-3 rounded-lg transition-all duration-300 hover:bg-Gray-50"
-                    onClick={() => toggleLockSetting(feature.key)}
-                  >
-                    {feature.isLocked ? feature.unlockText : feature.lockText}
-                  </button>
-                )}
-              </MenuItem>
-            </div>
-          ),
-      )}
-    </>
+  return lockableFeatures.map(
+    (feature) =>
+      feature.isDisplayed && (
+        <div role="none" key={feature.key}>
+          <MenuItem>
+            {() => (
+              <button
+                className="min-h-8 cursor-pointer py-0.5 w-full text-sm text-start leading-none font-medium text-Gray-950 dark:text-white px-3 rounded-lg transition-all duration-300 hover:bg-Gray-50 dark:hover:bg-dark-secondary2 data-[focus]:bg-Gray-50 dark:data-[focus]:bg-dark-secondary2 focus:outline-hidden"
+                onClick={() => toggleLockSetting(feature.key)}
+              >
+                {feature.isLocked ? feature.unlockText : feature.lockText}
+              </button>
+            )}
+          </MenuItem>
+        </div>
+      ),
   );
 };
 

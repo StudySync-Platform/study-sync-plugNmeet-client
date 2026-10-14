@@ -1,75 +1,71 @@
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 
 import { store, useAppDispatch, useAppSelector } from '../../../store';
-import {
-  updateIsActiveChatPanel,
-  updateIsEnabledExtendedVerticalCamView,
-} from '../../../store/slices/bottomIconsActivitySlice';
 import { ChatIconSVG } from '../../../assets/Icons/ChatIconSVG';
+import { setActiveSidePanel } from '../../../store/slices/bottomIconsActivitySlice';
 
 const ChatIcon = () => {
   const dispatch = useAppDispatch();
   const { t } = useTranslation();
-  const { showTooltip, isRecorder } = useMemo(() => {
+  const { showTooltip } = useMemo(() => {
     const session = store.getState().session;
     return {
       showTooltip: session.userDeviceType === 'desktop',
-      isRecorder: !!session.currentUser?.isRecorder,
     };
   }, []);
 
   const isActiveChatPanel = useAppSelector(
-    (state) => state.bottomIconsActivity.isActiveChatPanel,
+    (state) => state.bottomIconsActivity.activeSidePanel === 'CHAT',
   );
   const totalUnreadChatMsgs = useAppSelector(
     (state) => state.bottomIconsActivity.totalUnreadChatMsgs,
   );
 
-  useEffect(() => {
-    if (isActiveChatPanel && !isRecorder) {
-      dispatch(updateIsEnabledExtendedVerticalCamView(false));
-    }
-  }, [isActiveChatPanel, isRecorder, dispatch]);
-
   const toggleChatPanel = useCallback(() => {
-    dispatch(updateIsActiveChatPanel(!isActiveChatPanel));
-  }, [dispatch, isActiveChatPanel]);
+    dispatch(setActiveSidePanel('CHAT'));
+  }, [dispatch]);
 
   const wrapperClasses = clsx(
-    'message relative footer-icon cursor-pointer w-11 3xl:w-[52px] h-11 3xl:h-[52px] rounded-[15px] 3xl:rounded-[18px] border-[3px] 3xl:border-4',
+    'message relative footer-icon cursor-pointer w-10 md:w-11 3xl:w-[52px] h-10 md:h-11 3xl:h-[52px] rounded-[15px] 3xl:rounded-[18px] border-[3px] 3xl:border-4',
     {
-      'border-[rgba(124,206,247,0.25)]': isActiveChatPanel,
+      'focus-ring': true,
+      'border-[rgba(124,206,247,0.25)] dark:border-Gray-800': isActiveChatPanel,
       'border-transparent': !isActiveChatPanel,
     },
   );
 
   const innerDivClasses = clsx(
-    'h-full w-full flex items-center justify-center rounded-[12px] 3xl:rounded-[15px] border border-Gray-300 shadow transition-all duration-300 hover:bg-gray-100 text-Gray-950',
+    'footer-icon-bg h-full w-full flex items-center justify-center rounded-[12px] 3xl:rounded-[15px] border border-Gray-300 dark:border-Gray-700 shadow transition-all duration-300 hover:bg-gray-100 text-Gray-950 dark:text-white',
     {
       'has-tooltip': showTooltip,
-      'bg-gray-100': isActiveChatPanel,
-      'bg-white': !isActiveChatPanel,
+      'bg-gray-100 dark:bg-Gray-700': isActiveChatPanel,
+      'bg-white dark:bg-Gray-800': !isActiveChatPanel,
     },
   );
 
+  const tooltipText = isActiveChatPanel
+    ? t('footer.icons.hide-chat-panel')
+    : t('footer.icons.show-chat-panel');
+
   return (
-    <div className={wrapperClasses} onClick={toggleChatPanel}>
+    <button
+      type="button"
+      className={wrapperClasses}
+      onClick={toggleChatPanel}
+      aria-label={tooltipText.toString()}
+    >
       <div className={innerDivClasses}>
-        <span className="tooltip">
-          {isActiveChatPanel
-            ? t('footer.icons.hide-chat-panel')
-            : t('footer.icons.show-chat-panel')}
-        </span>
+        <span className="tooltip">{tooltipText}</span>
         <ChatIconSVG />
         {!isActiveChatPanel && totalUnreadChatMsgs > 0 && (
-          <div className="unseen-message-count bg-secondary-color w-4 3xl:w-5 h-4 3xl:h-5 rounded-full text-[10px] 3xl:text-xs text-white absolute -top-2 -right-1 flex justify-center items-center">
+          <div className="unseen-message-count bg-secondary-color w-4 3xl:w-5 h-4 3xl:h-5 rounded-full text-[10px] 3xl:text-xs text-white absolute -top-2 -end-1 flex justify-center items-center">
             {totalUnreadChatMsgs}
           </div>
         )}
       </div>
-    </div>
+    </button>
   );
 };
 

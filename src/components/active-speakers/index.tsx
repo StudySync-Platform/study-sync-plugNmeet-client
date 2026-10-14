@@ -6,23 +6,20 @@ import { selectSpeakingParticipants } from '../../store/slices/activeSpeakersSli
 import { participantsSelector } from '../../store/slices/participantSlice';
 import SpeakerComponent from './speaker';
 import { getMediaServerConn } from '../../helpers/livekit/utils';
+import { APP_LAYOUT_CLASSES } from '../../helpers/dimensions';
 import { IActiveSpeaker } from '../../store/slices/interfaces/activeSpeakers';
 
-const ACTIVE_SPEAKER_VIDEO_REARRANGE_DURATION = 4000;
+const ACTIVE_SPEAKER_VIDEO_REARRANGE_DURATION = 8000;
 
 const reOrderWebcams = throttle(
   (speakers: IActiveSpeaker[], room: ReturnType<typeof getMediaServerConn>) => {
     if (typeof room === 'undefined' || !speakers.length) {
       return;
     }
-    if (room.videoSubscribersMap.size < 3) {
-      // no need to update
-      return;
-    }
 
     for (let i = 0; i < speakers.length; i++) {
       const speaker = speakers[i];
-      const participant = room.room.getParticipantByIdentity(speaker.userId);
+      const participant = room.getVideoSubscriberParticipant(speaker.userId);
       // if this user has video then we can update to reorder
       if (participant && participant.videoTrackPublications.size) {
         room.addVideoSubscriber(participant);
@@ -33,9 +30,13 @@ const reOrderWebcams = throttle(
   { edges: ['leading'] },
 );
 
-const ActiveSpeakers = () => {
+const ActiveSpeakers = ({ activeSidePanel }) => {
   const activeSpeakers = useAppSelector(selectSpeakingParticipants);
   const participantIds = useAppSelector(participantsSelector.selectIds);
+  const focusActiveSpeakerWebcam = useAppSelector(
+    (state) => state.roomSettings.focusActiveSpeakerWebcam,
+  );
+  const hasWebcamPages = useAppSelector((state) => state.roomSettings.hasWebcamPages);
   const room = getMediaServerConn();
 
   const speakingParticipantIds = useMemo(
@@ -48,7 +49,7 @@ const ActiveSpeakers = () => {
   );
 
   useEffect(() => {
-    if (speakingParticipantIds) {
+    if (hasWebcamPages && focusActiveSpeakerWebcam && speakingParticipantIds) {
       reOrderWebcams(activeSpeakers, room);
     }
 
@@ -56,17 +57,15 @@ const ActiveSpeakers = () => {
     return () => {
       reOrderWebcams.cancel();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [speakingParticipantIds, room]);
+    // oxlint-disable-next-line exhaustive-deps, react/exhaustive-effect-dependencies
+  }, [speakingParticipantIds, room, focusActiveSpeakerWebcam, hasWebcamPages]);
 
   const activeSpeakersElms = useMemo(() => {
     // Create a Set for efficient O(1) lookups.
     const participantIdSet = new Set(participantIds);
 
     // Filter the speakers first, which is more performant.
-    const validSpeakers = activeSpeakers.filter((speaker) =>
-      participantIdSet.has(speaker.userId),
-    );
+    const validSpeakers = activeSpeakers.filter((speaker) => participantIdSet.has(speaker.userId));
 
     if (!validSpeakers.length) {
       return null;
@@ -79,7 +78,9 @@ const ActiveSpeakers = () => {
 
   return (
     activeSpeakersElms && (
-      <div className="active-speakers-wrap flex w-full items-center justify-center absolute top-0 left-0 z-9999">
+      <div
+        className={`active-speakers-wrap flex items-center justify-center absolute top-0 start-0 pointer-events-none ${activeSidePanel ? APP_LAYOUT_CLASSES.activeSpeakersOpen : 'w-full'}`}
+      >
         {activeSpeakersElms}
       </div>
     )

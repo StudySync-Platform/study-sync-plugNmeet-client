@@ -71,10 +71,10 @@
     box-shadow: 0 0 5px 0 rgba(242, 0, 0, 0.3);
   }
   65% {
-    box-shadow: 0 0 5px 10px rgb(242, 242, 242);
+    box-shadow: 0 0 5px 10px rgb(242, 242, 242, 0.1);
   }
   90% {
-    box-shadow: 0 0 5px 10px rgb(242, 242, 242);
+    box-shadow: 0 0 5px 10px rgb(242, 242, 242, 0);
   }
 }
 @keyframes lds-ripple2 {
@@ -105,4 +105,27 @@
 
 .hiddenAnimation {
   animation: refresh 0.5s infinite;
+}
+
+@keyframes reaction-float-up {
+  0% {
+    transform: translate(0, 0) scale(0.6);
+    opacity: 0;
+  }
+  12% {
+    transform: translate(calc(var(--reaction-drift, 0px) * 0.25), -6vh)
+      scale(1.15);
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--reaction-drift, 0px), -68vh) scale(1);
+    opacity: 0;
+  }
+}
+.reaction-float {
+  animation: reaction-float-up var(--reaction-dur, 4s) ease-out forwards;
+  will-change: transform, opacity;
 }

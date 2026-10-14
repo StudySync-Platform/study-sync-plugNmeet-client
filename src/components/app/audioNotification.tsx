@@ -2,17 +2,16 @@ import React, { useEffect, useRef } from 'react';
 
 import { useAppDispatch, useAppSelector } from '../../store';
 import { updatePlayAudioNotification } from '../../store/slices/roomSettingsSlice';
+import { getConfigValue } from '../../helpers/utils';
 
 const AudioNotification = () => {
   const dispatch = useAppDispatch();
   const ref = useRef<HTMLAudioElement>(null);
-  const playAudioNotification = useAppSelector(
-    (state) => state.roomSettings.playAudioNotification,
-  );
+  const playAudioNotification = useAppSelector((state) => state.roomSettings.playAudioNotification);
   const allowPlayAudioNotification = useAppSelector(
     (state) => state.roomSettings.allowPlayAudioNotification,
   );
-  const assetPath = (window as any).STATIC_ASSETS_PATH ?? './assets';
+  const assetPath = getConfigValue('staticAssetsPath', './assets', 'STATIC_ASSETS_PATH');
 
   useEffect(() => {
     const el = ref.current;

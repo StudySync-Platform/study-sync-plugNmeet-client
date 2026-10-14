@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import {
   CloudRecordingVariants,
   CommonResponseSchema,
+  RecorderBotOptions,
   RecordingReqSchema,
   RecordingTasks,
 } from 'plugnmeet-protocol-js';
@@ -12,6 +13,7 @@ import { IUseCloudRecordingReturn, RecordingType } from './IRecording';
 import sendAPIRequest from '../../../../helpers/api/plugNmeetAPI';
 import { store, useAppDispatch } from '../../../../store';
 import { addUserNotification } from '../../../../store/slices/roomSettingsSlice';
+import { getConfigValue } from '../../../../helpers/utils';
 
 const useCloudRecording = (): IUseCloudRecordingReturn => {
   const TYPE_OF_RECORDING = RecordingType.RECORDING_TYPE_CLOUD;
@@ -24,24 +26,20 @@ const useCloudRecording = (): IUseCloudRecordingReturn => {
     return {
       currentRoom: session.currentRoom,
       isCloud: session.isCloud,
-      e2eeFeatures:
-        session.currentRoom.metadata?.roomFeatures?.endToEndEncryptionFeatures,
+      e2eeFeatures: session.currentRoom.metadata?.roomFeatures?.endToEndEncryptionFeatures,
     };
   }, []);
 
   const startRecording = useCallback(
-    async (variant?: CloudRecordingVariants) => {
+    async (variant?: CloudRecordingVariants, botOptions?: RecorderBotOptions) => {
       const body = create(RecordingReqSchema, {
         task: RecordingTasks.START_RECORDING,
         sid: currentRoom.sid,
         recordingVariant: CloudRecordingVariants.FULL_SCREEN_CLOUD_RECORDING,
+        recorderBotOptions: botOptions,
       });
 
-      if (
-        isCloud &&
-        variant &&
-        variant === CloudRecordingVariants.MEDIA_ONLY_CLOUD_RECORDING
-      ) {
+      if (isCloud && variant && variant === CloudRecordingVariants.MEDIA_ONLY_CLOUD_RECORDING) {
         if (e2eeFeatures?.isEnabled) {
           dispatch(
             addUserNotification({
@@ -51,8 +49,7 @@ const useCloudRecording = (): IUseCloudRecordingReturn => {
           );
           return;
         }
-        body.recordingVariant =
-          CloudRecordingVariants.MEDIA_ONLY_CLOUD_RECORDING;
+        body.recordingVariant = CloudRecordingVariants.MEDIA_ONLY_CLOUD_RECORDING;
       }
 
       if (e2eeFeatures?.enabledSelfInsertEncryptionKey) {
@@ -64,12 +61,21 @@ const useCloudRecording = (): IUseCloudRecordingReturn => {
         );
         return;
       }
-
-      if (typeof (window as any).DESIGN_CUSTOMIZATION !== 'undefined') {
-        body.customDesign = `${(window as any).DESIGN_CUSTOMIZATION}`.replace(
-          /\s/g,
-          '',
-        );
+      const customDesign = getConfigValue<string | undefined>(
+        'designCustomization',
+        undefined,
+        'DESIGN_CUSTOMIZATION',
+      );
+      if (typeof customDesign !== 'undefined') {
+        try {
+          if (typeof customDesign === 'object') {
+            body.customDesign = JSON.stringify(customDesign);
+          } else {
+            body.customDesign = customDesign.replace(/\s/g, '');
+          }
+        } catch (e) {
+          console.error(e);
+        }
       }
       const r = await sendAPIRequest(
         'recording',
@@ -81,8 +87,16 @@ const useCloudRecording = (): IUseCloudRecordingReturn => {
       const res = fromBinary(CommonResponseSchema, new Uint8Array(r));
       let msg = 'footer.notice.start-recording-progress';
       if (!res.status) {
-        setHasError(true);
-        msg = res.msg;
+        // Only show error if metadata hasn't already confirmed recording started
+        if (store.getState().session.isActiveRecording) {
+          msg = '';
+        } else {
+          setHasError(true);
+          msg = res.msg;
+        }
+      }
+      if (msg === '') {
+        return;
       }
 
       dispatch(
@@ -113,8 +127,16 @@ const useCloudRecording = (): IUseCloudRecordingReturn => {
       let msg = 'footer.notice.stop-recording-service-in-progress';
 
       if (!res.status) {
-        setHasError(true);
-        msg = res.msg;
+        // Only show error if metadata hasn't already confirmed recording stopped
+        if (!store.getState().session.isActiveRecording) {
+          msg = '';
+        } else {
+          setHasError(true);
+          msg = res.msg;
+        }
+      }
+      if (msg === '') {
+        return;
       }
 
       dispatch(

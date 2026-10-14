@@ -1,22 +1,18 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'react-toastify';
-import {
-  ActivatePollsReqSchema,
-  CommonResponseSchema,
-} from 'plugnmeet-protocol-js';
+import { ActivatePollsReqSchema, CommonResponseSchema } from 'plugnmeet-protocol-js';
 import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
 
 import { useAppDispatch, useAppSelector } from '../../../../../store';
 import sendAPIRequest from '../../../../../helpers/api/plugNmeetAPI';
-import { updateIsActivePollsPanel } from '../../../../../store/slices/bottomIconsActivitySlice';
+import { setActiveSidePanel } from '../../../../../store/slices/bottomIconsActivitySlice';
 
 const usePolls = () => {
   const dispatch = useAppDispatch();
   const { t } = useTranslation();
   const isActivePoll = useAppSelector(
-    (state) =>
-      state.session.currentRoom.metadata?.roomFeatures?.pollsFeatures?.isActive,
+    (state) => state.session.currentRoom.metadata?.roomFeatures?.pollsFeatures?.isActive,
   );
 
   const togglePolls = useCallback(async () => {
@@ -45,7 +41,7 @@ const usePolls = () => {
       });
     } else {
       toast.dismiss(id);
-      dispatch(updateIsActivePollsPanel(true));
+      dispatch(setActiveSidePanel('POLLS'));
     }
   }, [isActivePoll, dispatch, t]);
 

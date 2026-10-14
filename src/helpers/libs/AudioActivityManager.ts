@@ -1,7 +1,8 @@
 import { throttle } from 'es-toolkit';
+import { getConfigValue } from '../utils';
 
 // --- Configuration ---
-const SPEAKING_THRESHOLD = 0.04;
+const SPEAKING_THRESHOLD = getConfigValue<number>('speakingThreshold', 0.1);
 const SILENCE_THRESHOLD = 0.02;
 // Delay to prevent the speaking indicator from flickering during natural pauses.
 const STOP_SPEAKING_DELAY = 1000;
@@ -34,19 +35,29 @@ interface TrackProcessor {
  * It is library-agnostic and operates directly on the standard MediaStream API.
  */
 class AudioActivityManager {
-  private readonly audioContext: AudioContext;
+  private audioContext: AudioContext | null = null;
   private tracks = new Map<string, TrackProcessor>();
   private animationFrameId?: number;
 
-  constructor() {
-    // This class is a singleton and should only be used in the browser.
-    if (typeof window === 'undefined' || !window.AudioContext) {
-      // In a non-browser environment (like SSR), do nothing.
-      this.audioContext = null as any;
+  /**
+   * Initializes the AudioContext. This must be called after a user's gesture.
+   */
+  private async initialize() {
+    if (this.audioContext && this.audioContext.state === 'running') {
       return;
     }
-    this.audioContext = new AudioContext();
-    this.startLoop();
+    if (typeof window === 'undefined' || !window.AudioContext) {
+      return;
+    }
+
+    if (!this.audioContext) {
+      this.audioContext = new AudioContext();
+      this.startLoop(); // Start the loop only once the context is created.
+    }
+
+    if (this.audioContext.state === 'suspended') {
+      await this.audioContext.resume();
+    }
   }
 
   private startLoop = () => {
@@ -97,7 +108,9 @@ class AudioActivityManager {
   /**
    * Registers or updates a MediaStream for activity monitoring.
    */
-  public addStream(stream: MediaStream, callback: SubscriberCallback) {
+  public addStream = async (stream: MediaStream, callback: SubscriberCallback) => {
+    await this.initialize();
+
     if (!stream || !this.audioContext) {
       return;
     }
@@ -107,9 +120,7 @@ class AudioActivityManager {
     }
 
     if (stream.getAudioTracks().length === 0) {
-      console.warn(
-        `AudioActivityManager: Stream with id '${stream.id}' has no audio tracks.`,
-      );
+      console.warn(`AudioActivityManager: Stream with id '${stream.id}' has no audio tracks.`);
       return;
     }
 
@@ -137,12 +148,12 @@ class AudioActivityManager {
     };
 
     this.tracks.set(stream.id, processor);
-  }
+  };
 
   /**
    * Unregisters a MediaStream from activity monitoring and cleans up resources.
    */
-  public removeStream(streamId: string) {
+  public removeStream = (streamId: string) => {
     const processor = this.tracks.get(streamId);
     if (!processor) return;
 
@@ -154,12 +165,12 @@ class AudioActivityManager {
 
     processor.source.disconnect();
     this.tracks.delete(streamId);
-  }
+  };
 
   /**
    * Stops the animation loop and cleans up all associated audio resources.
    */
-  public destroy() {
+  public destroy = () => {
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = undefined;
@@ -178,8 +189,11 @@ class AudioActivityManager {
     if (this.audioContext && this.audioContext.state !== 'closed') {
       this.audioContext.close().then();
     }
-  }
+  };
 }
 
-// Export a single, global instance for the entire application to use.
-export const audioActivityManager = new AudioActivityManager();
+const audioActivityManager = new AudioActivityManager();
+
+export const addAudioStream = audioActivityManager.addStream;
+export const removeAudioStream = audioActivityManager.removeStream;
+export const destroyAudioManager = audioActivityManager.destroy;

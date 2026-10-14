@@ -1,4 +1,4 @@
-import React, { Fragment, useEffect, useState } from 'react';
+import React, { Fragment, useEffect, useRef, useState } from 'react';
 import {
   Button,
   Dialog,
@@ -36,6 +36,19 @@ const Modal = ({
 }: IModalProps) => {
   const [isOpen, setIsOpen] = useState(show);
 
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      // Delay auto-focus until after the 300ms enter transition completes to
+      // avoid a visual jump glitch where focus fires mid-transition.
+      const timer = setTimeout(() => {
+        closeButtonRef.current?.focus();
+      }, 350);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen]);
+
   useEffect(() => {
     setIsOpen(show);
   }, [show]);
@@ -57,7 +70,7 @@ const Modal = ({
           leaveFrom="opacity-100"
           leaveTo="opacity-0"
         >
-          <div className="fixed inset-0 bg-Gray-950/70" />
+          <div className="fixed inset-0 bg-Gray-950/70 dark:bg-Gray-950/80" />
         </TransitionChild>
 
         <div className="fixed inset-0 flex w-screen justify-center p-4 scrollBar">
@@ -72,28 +85,36 @@ const Modal = ({
           >
             <DialogPanel
               className={clsx(
-                'w-full bg-white border border-Gray-200 shadow-virtualPOP rounded-xl m-auto',
+                'w-full bg-white dark:bg-dark-primary border border-Gray-200 dark:border-Gray-800 shadow-virtualPOP rounded-xl m-auto',
                 maxWidth,
                 customClass,
               )}
             >
               <DialogTitle
                 as="h3"
-                className="flex items-center justify-between text-base font-semibold leading-7 text-Gray-950 px-4 py-2 border-b border-Gray-100"
+                className="flex items-center justify-between text-sm md:text-base font-semibold leading-7 text-Gray-950 dark:text-white px-4 py-2 border-b border-Gray-100 dark:border-Gray-800"
               >
                 <span>{title}</span>
                 <Button
-                  className="cursor-pointer"
+                  ref={closeButtonRef}
+                  data-autofocus
+                  className="cursor-pointer focus-ring"
                   onClick={() => setIsOpen(false)}
+                  aria-label="Close"
                 >
-                  <PopupCloseSVGIcon classes="text-Gray-600" />
+                  <PopupCloseSVGIcon classes="text-Gray-600 dark:text-white" />
                 </Button>
               </DialogTitle>
-              <div className={clsx('p-4 bg-Gray-25', customBodyClass)}>
+              <div
+                className={clsx(
+                  'p-4 bg-Gray-25 dark:bg-dark-primary rounded-b-xl',
+                  customBodyClass,
+                )}
+              >
                 {children}
               </div>
               {renderButtons && (
-                <div className="px-4 py-4 border-t border-Gray-100 flex justify-end rounded-b-xl">
+                <div className="px-4 py-4 border-t border-Gray-100 dark:border-Gray-800 flex justify-end">
                   {renderButtons()}
                 </div>
               )}

@@ -1,53 +1,80 @@
-import { DataChannelMessage, DataMsgBodyType } from 'plugnmeet-protocol-js';
+import {
+  ChatMessage,
+  DataChannelMessage,
+  DataMsgBodyType,
+  InsightsTranscriptionResultSchema,
+} from 'plugnmeet-protocol-js';
 
 import ConnectNats from './ConnectNats';
 import { store } from '../../store';
-import {
-  addAllExcalidrawElements,
-  updateRequestedWhiteboardData,
-} from '../../store/slices/whiteboard';
 import { pollsApi } from '../../store/services/pollsApi';
-import { SpeechTextBroadcastFormat } from '../../store/slices/interfaces/speechServices';
-import { addSpeechSubtitleText } from '../../store/slices/speechServicesSlice';
 import { updateParticipant } from '../../store/slices/participantSlice';
-import {
-  addExternalMediaPlayerAction,
-  externalMediaPlayerSeekTo,
-} from '../../store/slices/externalMediaPlayer';
+import { addExternalMediaPlayerEvent } from '../../store/slices/externalMediaPlayer';
+import { addReaction, IReaction, REACTION_EMOJIS } from '../../store/slices/reactionsSlice';
 import { addUserNotification } from '../../store/slices/roomSettingsSlice';
 import i18n from '../i18n';
-import { ConnectionQuality } from 'livekit-client';
-import { updateReceivedInvitationFor } from '../../store/slices/breakoutRoomSlice';
+import { getNotepadController } from '../../components/shared-notepad/NotepadController';
+import { fromJsonString } from '@bufbuild/protobuf';
+import { TextWithInfo } from '../../store/slices/interfaces/speechServices';
+import { addSpeechSubtitleText } from '../../store/slices/speechServicesSlice';
+import { addAllChatMessages, selectPublicChatMessages } from '../../store/slices/chatMessagesSlice';
+import { PnmConnectionQuality } from '../livekit/ConnectionQualityMonitor';
+
+const CHAT_SYNC_CHUNK_SIZE = 50;
+// Hard cap on a single received sync chunk: a malicious/buggy peer could
+// send a huge JSON blob, so refuse to JSON.parse anything unbounded.
+const CHAT_SYNC_MAX_CHUNK_BYTES = 512 * 1024;
+
+const getSentAtMs = (msg: ChatMessage): number => {
+  const sentAt = Number(msg.sentAt);
+  return Number.isFinite(sentAt) ? sentAt : 0;
+};
+
+const isSyncableChatMessage = (msg: unknown): msg is ChatMessage => {
+  if (typeof msg !== 'object' || msg === null) {
+    return false;
+  }
+  const m = msg as Record<string, unknown>;
+  return (
+    typeof m.id === 'string' &&
+    m.id !== '' &&
+    typeof m.fromUserId === 'string' &&
+    m.fromUserId !== '' &&
+    typeof m.sentAt === 'string' &&
+    typeof m.message === 'string' &&
+    typeof m.isPrivate === 'boolean'
+  );
+};
 
 export default class HandleDataMessage {
-  private _that: ConnectNats;
+  private connectNats: ConnectNats;
 
-  constructor(that: ConnectNats) {
-    this._that = that;
+  constructor(connectNats: ConnectNats) {
+    this.connectNats = connectNats;
   }
 
   public handleMessage = async (payload: DataChannelMessage) => {
     switch (payload.type) {
-      case DataMsgBodyType.REQ_FULL_WHITEBOARD_DATA:
-        if (payload.toUserId === this._that.userId) {
+      case DataMsgBodyType.REQ_PUBLIC_CHAT_DATA:
+        if (payload.toUserId === this.connectNats.userId) {
           // only if was sent for me
-          this.handleSendInitWhiteboard(payload);
+          await this.handlePublicChatDataReq(payload.fromUserId);
         }
         break;
-      case DataMsgBodyType.RES_FULL_WHITEBOARD_DATA:
-        if (payload.toUserId === this._that.userId) {
+      case DataMsgBodyType.RES_PUBLIC_CHAT_DATA:
+        if (payload.toUserId === this.connectNats.userId) {
           // only if was sent for me
-          store.dispatch(addAllExcalidrawElements(payload.message));
+          this.handlePublicChatDataRes(payload.message);
         }
         break;
       case DataMsgBodyType.USER_VISIBILITY_CHANGE:
-        if (payload.fromUserId === this._that.userId) {
+        if (payload.fromUserId === this.connectNats.userId) {
           return;
         }
         this.handleUserVisibility(payload);
         break;
       case DataMsgBodyType.INFO:
-        if (payload.fromUserId === this._that.userId || this._that.isRecorder) {
+        if (payload.fromUserId === this.connectNats.userId || this.connectNats.isRecorder) {
           return;
         }
         store.dispatch(
@@ -58,7 +85,7 @@ export default class HandleDataMessage {
         );
         break;
       case DataMsgBodyType.ALERT:
-        if (payload.fromUserId === this._that.userId || this._that.isRecorder) {
+        if (payload.fromUserId === this.connectNats.userId || this.connectNats.isRecorder) {
           return;
         }
         store.dispatch(
@@ -69,13 +96,16 @@ export default class HandleDataMessage {
         );
         break;
       case DataMsgBodyType.EXTERNAL_MEDIA_PLAYER_EVENTS:
-        if (payload.fromUserId === this._that.userId) {
+        if (payload.fromUserId === this.connectNats.userId) {
           return;
         }
         this.handleExternalMediaPlayerEvents(payload.message);
         break;
+      case DataMsgBodyType.REACTION:
+        this.handleUserEmojiReaction(payload.message);
+        break;
       case DataMsgBodyType.NEW_POLL_RESPONSE:
-        if (payload.fromUserId === this._that.userId) {
+        if (payload.fromUserId === this.connectNats.userId) {
           return;
         }
         store.dispatch(
@@ -95,44 +125,27 @@ export default class HandleDataMessage {
           ]),
         );
         break;
-      case DataMsgBodyType.SPEECH_SUBTITLE_TEXT:
-        this.handleSpeechSubtitleText(payload.message);
-        break;
       case DataMsgBodyType.USER_CONNECTION_QUALITY_CHANGE:
         store.dispatch(
           updateParticipant({
             id: payload.fromUserId,
             changes: {
-              connectionQuality: payload.message as ConnectionQuality,
+              connectionQuality: payload.message as PnmConnectionQuality,
             },
           }),
         );
         break;
-      case DataMsgBodyType.PUSH_JOIN_BREAKOUT_ROOM:
-        if (payload.toUserId === this._that.userId) {
-          store.dispatch(updateReceivedInvitationFor(payload.message));
-        }
+      case DataMsgBodyType.NOTEPAD_UPDATE:
+      case DataMsgBodyType.NOTEPAD_AWARENESS:
+      case DataMsgBodyType.NOTEPAD_SYNC_REQUEST:
+      case DataMsgBodyType.NOTEPAD_SYNC_RESPONSE:
+        getNotepadController().handleNotepadMessage(payload);
         break;
     }
   };
 
-  private handleSendInitWhiteboard(payload: DataChannelMessage) {
-    if (store.getState().whiteboard.requestedWhiteboardData.requested) {
-      // already have one request
-      return;
-    }
-    // we'll update the reducer-only
-    // component will take care for sending data
-    store.dispatch(
-      updateRequestedWhiteboardData({
-        requested: true,
-        sendTo: payload.fromUserId,
-      }),
-    );
-  }
-
   private handleUserVisibility(payload: DataChannelMessage) {
-    if (!this._that.isAdmin) {
+    if (!this.connectNats.isAdmin) {
       return;
     }
     store.dispatch(
@@ -150,32 +163,99 @@ export default class HandleDataMessage {
       return;
     }
     const data = JSON.parse(msg);
-    store.dispatch(addExternalMediaPlayerAction(data.action));
-    if (typeof data.seekTo !== 'undefined') {
-      store.dispatch(externalMediaPlayerSeekTo(data.seekTo));
-    }
+    store.dispatch(addExternalMediaPlayerEvent(data));
   }
 
-  private handleSpeechSubtitleText(message: string) {
+  public handleSpeechSubtitleText(message: string) {
     if (message === '') {
       return;
     }
-    const data: SpeechTextBroadcastFormat = JSON.parse(message);
     const lang = store.getState().speechServices.selectedSubtitleLang;
+    const data = fromJsonString(InsightsTranscriptionResultSchema, message);
 
-    if (lang !== '' && typeof data.result[lang] !== 'undefined') {
+    if (lang !== '') {
       const d = new Date();
+      const type = data.isPartial ? 'interim' : 'final';
+      const result: TextWithInfo = {
+        text: '',
+        from: data.fromUserName,
+        time: d.toLocaleTimeString(),
+        id: d.getUTCMilliseconds().toString(),
+      };
+      if (data.lang === lang) {
+        result.text = data.text;
+      } else if (typeof data.translations[lang] !== 'undefined') {
+        result.text = data.translations[lang];
+      } else {
+        return;
+      }
+
       store.dispatch(
         addSpeechSubtitleText({
-          type: data.type,
-          result: {
-            text: data.result[lang],
-            from: data.from,
-            time: d.toLocaleTimeString(),
-            id: d.getUTCMilliseconds().toString(),
-          },
+          type,
+          result,
         }),
       );
+    }
+  }
+
+  private async handlePublicChatDataReq(fromUserId: string) {
+    // Stream all messages in small chunks so a single RES_PUBLIC_CHAT_DATA
+    // blob can't exceed NATS ~1MB max payload. Chunks arrive in order; the
+    // receiver dedupes by id via addAllChatMessages.
+    const publicChats = selectPublicChatMessages(store.getState()).filter(
+      (msg) => msg.fromUserId !== 'system',
+    );
+    if (!publicChats.length) {
+      return;
+    }
+
+    const ordered = publicChats.slice().sort((a, b) => getSentAtMs(a) - getSentAtMs(b));
+
+    for (let i = 0; i < ordered.length; i += CHAT_SYNC_CHUNK_SIZE) {
+      const chunk = ordered.slice(i, i + CHAT_SYNC_CHUNK_SIZE);
+      await this.connectNats.sendDataMessage(
+        DataMsgBodyType.RES_PUBLIC_CHAT_DATA,
+        JSON.stringify(chunk),
+        fromUserId,
+      );
+    }
+  }
+
+  private handlePublicChatDataRes(msg: string) {
+    try {
+      if (msg.length > CHAT_SYNC_MAX_CHUNK_BYTES) {
+        console.warn('chat sync chunk too large, ignoring');
+        return;
+      }
+      const parsed: unknown = JSON.parse(msg);
+      if (!Array.isArray(parsed)) {
+        return;
+      }
+      const data = parsed.filter(isSyncableChatMessage).slice(0, CHAT_SYNC_CHUNK_SIZE);
+      if (!data.length) {
+        return;
+      }
+      store.dispatch(
+        addAllChatMessages({
+          messages: data,
+          currentUserId: this.connectNats.userId,
+        }),
+      );
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  private handleUserEmojiReaction(msg: string) {
+    try {
+      const data: IReaction = JSON.parse(msg);
+      if (!REACTION_EMOJIS.includes(data.emoji)) {
+        return;
+      }
+      store.dispatch(addReaction(data));
+    } catch (e) {
+      console.error(e);
     }
   }
 }

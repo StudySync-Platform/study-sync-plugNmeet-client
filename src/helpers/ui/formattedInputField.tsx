@@ -10,6 +10,8 @@ interface IFormattedInputFieldProps {
   placeholder?: string;
   onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   type?: string;
+  helpText?: string;
+  maxWidthClass?: string;
 }
 
 const FormattedInputField = ({
@@ -20,37 +22,43 @@ const FormattedInputField = ({
   placeholder,
   onChange,
   type = 'text',
+  helpText,
+  maxWidthClass = 'sm:max-w-[250px]',
 }: IFormattedInputFieldProps) => {
   const inputClasses = clsx(
     'default-input rounded-[8px] h-10 w-full',
     {
-      'dark:border-dark-text bg-transparent dark:text-dark-text cursor-default':
-        readOnly,
+      'dark:border-dark-text bg-transparent dark:text-dark-text cursor-default': readOnly,
     },
-    label ? 'max-w-[250px]' : '',
+    label ? `max-w-full ${maxWidthClass}` : '',
   );
 
   return (
-    <Field as="div" className="flex items-center justify-between mb-2">
-      {label ? (
-        <Label
-          htmlFor={id}
-          className="pr-4 flex-1 text-sm text-Gray-950 ltr:text-left rtl:text-right dark:text-dark-text"
-        >
-          {label}
-        </Label>
+    <div className="mb-2">
+      <Field as="div" className="flex flex-wrap items-center justify-between">
+        {label ? (
+          <Label
+            htmlFor={id}
+            className="pb-2 sm:pb-0 sm:pe-4 flex-1 text-sm text-Gray-950 text-start dark:text-dark-text"
+          >
+            {label}
+          </Label>
+        ) : null}
+        <input
+          type={type}
+          name={id}
+          id={id}
+          value={value ?? ''}
+          readOnly={readOnly}
+          onChange={onChange}
+          className={inputClasses}
+          placeholder={placeholder}
+        />
+      </Field>
+      {helpText ? (
+        <p className="mt-2 text-xs text-gray-600 dark:text-gray-300">{helpText}</p>
       ) : null}
-      <input
-        type={type}
-        name={id}
-        id={id}
-        value={value ?? ''}
-        readOnly={readOnly}
-        onChange={onChange}
-        className={inputClasses}
-        placeholder={placeholder}
-      />
-    </Field>
+    </div>
   );
 };
 

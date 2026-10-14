@@ -1,23 +1,21 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import { DeviceOrientation, IBottomIconsSlice } from './interfaces/bottomIcons';
-import {
-  BackgroundConfig,
-  defaultBackgroundConfig,
-} from '../../components/virtual-background/helpers/backgroundHelper';
+
+import { DeviceOrientation, IBottomIconsSlice, SidePanelType } from './interfaces/bottomIcons';
 
 const initialState: IBottomIconsSlice = {
   isActiveMicrophone: false,
   isActiveWebcam: false,
-  isActiveChatPanel: false,
-  isActiveParticipantsPanel: false,
-  isActivePollsPanel: false,
   isActiveRaisehand: false,
   isActiveRecording: false,
   isActiveScreenshare: false,
   isActiveSharedNotePad: false,
   isActiveWhiteboard: false,
+  isActiveInsightsAiTextChat: false,
+
+  activeSidePanel: 'PARTICIPANTS',
 
   isMicMuted: false,
+  isWebcamMuted: false,
   screenWidth: 1024,
   screenHeight: 500,
   deviceOrientation: 'portrait',
@@ -32,9 +30,10 @@ const initialState: IBottomIconsSlice = {
   showDisplayExternalLinkModal: false,
   showSpeechSettingsModal: false,
   showSpeechSettingOptionsModal: false,
+  showInsightsAISettingsModal: false,
 
   totalUnreadChatMsgs: 0,
-  virtualBackground: defaultBackgroundConfig,
+
   isEnabledExtendedVerticalCamView: false,
 };
 
@@ -42,6 +41,19 @@ const bottomIconsSlice = createSlice({
   name: 'bottomIconsActivity',
   initialState,
   reducers: {
+    setActiveSidePanel: (state, action: PayloadAction<SidePanelType>) => {
+      // If the payload is the same as the current active panel, it means we're toggling it off.
+      if (state.activeSidePanel === action.payload) {
+        state.activeSidePanel = null;
+      } else {
+        state.activeSidePanel = action.payload;
+      }
+
+      // Handle side effects, like clearing unread messages, in one place.
+      if (state.activeSidePanel === 'CHAT') {
+        state.totalUnreadChatMsgs = 0;
+      }
+    },
     updateIsActiveMicrophone: (state, action: PayloadAction<boolean>) => {
       state.isActiveMicrophone = action.payload;
     },
@@ -51,47 +63,8 @@ const bottomIconsSlice = createSlice({
     updateIsActiveWebcam: (state, action: PayloadAction<boolean>) => {
       state.isActiveWebcam = action.payload;
     },
-    updateIsActiveChatPanel: (state, action: PayloadAction<boolean>) => {
-      // we'll close ParticipantsPanel if screen size is small
-      if (action.payload) {
-        if (state.isActiveParticipantsPanel) {
-          state.isActiveParticipantsPanel = false;
-        }
-        if (state.isActivePollsPanel) {
-          state.isActivePollsPanel = false;
-        }
-      }
-      state.isActiveChatPanel = action.payload;
-
-      if (state.isActiveChatPanel) {
-        // if open then we'll make it 0
-        state.totalUnreadChatMsgs = 0;
-      }
-    },
-    updateIsActiveParticipantsPanel: (
-      state,
-      action: PayloadAction<boolean>,
-    ) => {
-      if (action.payload) {
-        if (state.isActiveChatPanel) {
-          state.isActiveChatPanel = false;
-        }
-        if (state.isActivePollsPanel) {
-          state.isActivePollsPanel = false;
-        }
-      }
-      state.isActiveParticipantsPanel = action.payload;
-    },
-    updateIsActivePollsPanel: (state, action: PayloadAction<boolean>) => {
-      if (action.payload) {
-        if (state.isActiveChatPanel) {
-          state.isActiveChatPanel = false;
-        }
-        if (state.isActiveParticipantsPanel) {
-          state.isActiveParticipantsPanel = false;
-        }
-      }
-      state.isActivePollsPanel = action.payload;
+    updateIsWebcamMuted: (state, action: PayloadAction<boolean>) => {
+      state.isWebcamMuted = action.payload;
     },
     updateIsActiveRaisehand: (state, action: PayloadAction<boolean>) => {
       state.isActiveRaisehand = action.payload;
@@ -103,9 +76,9 @@ const bottomIconsSlice = createSlice({
       state.isActiveScreenshare = action.payload;
 
       if (state.isActiveScreenshare) {
-        // in this case disable both
+        // If screen sharing starts, we should close any open side panel.
+        state.activeSidePanel = null;
         state.isActiveWhiteboard = false;
-        state.isActiveParticipantsPanel = false;
       }
     },
     updateIsActiveSharedNotePad: (state, action: PayloadAction<boolean>) => {
@@ -114,16 +87,16 @@ const bottomIconsSlice = createSlice({
     updateIsActiveWhiteboard: (state, action: PayloadAction<boolean>) => {
       state.isActiveWhiteboard = action.payload;
     },
+    updateIsActiveInsightsAiTextChat: (state, action: PayloadAction<boolean>) => {
+      state.isActiveInsightsAiTextChat = action.payload;
+    },
     updateScreenWidth: (state, action: PayloadAction<number>) => {
       state.screenWidth = action.payload;
     },
     updateScreenHeight: (state, action: PayloadAction<number>) => {
       state.screenHeight = action.payload;
     },
-    updateDeviceOrientation: (
-      state,
-      action: PayloadAction<DeviceOrientation>,
-    ) => {
+    updateDeviceOrientation: (state, action: PayloadAction<DeviceOrientation>) => {
       state.deviceOrientation = action.payload;
     },
 
@@ -140,74 +113,50 @@ const bottomIconsSlice = createSlice({
     updateShowRtmpModal: (state, action: PayloadAction<boolean>) => {
       state.showRtmpModal = action.payload;
     },
-    updateShowExternalMediaPlayerModal: (
-      state,
-      action: PayloadAction<boolean>,
-    ) => {
+    updateShowExternalMediaPlayerModal: (state, action: PayloadAction<boolean>) => {
       state.showExternalMediaPlayerModal = action.payload;
     },
-    updateShowManageWaitingRoomModal: (
-      state,
-      action: PayloadAction<boolean>,
-    ) => {
+    updateShowManageWaitingRoomModal: (state, action: PayloadAction<boolean>) => {
       state.showManageWaitingRoomModal = action.payload;
     },
-    updateShowManageBreakoutRoomModal: (
-      state,
-      action: PayloadAction<boolean>,
-    ) => {
+    updateShowManageBreakoutRoomModal: (state, action: PayloadAction<boolean>) => {
       state.showManageBreakoutRoomModal = action.payload;
     },
-    updateDisplayExternalLinkRoomModal: (
-      state,
-      action: PayloadAction<boolean>,
-    ) => {
+    updateDisplayExternalLinkRoomModal: (state, action: PayloadAction<boolean>) => {
       state.showDisplayExternalLinkModal = action.payload;
     },
-    updateDisplaySpeechSettingsModal: (
-      state,
-      action: PayloadAction<boolean>,
-    ) => {
+    updateDisplaySpeechSettingsModal: (state, action: PayloadAction<boolean>) => {
       state.showSpeechSettingsModal = action.payload;
     },
-    updateDisplaySpeechSettingOptionsModal: (
-      state,
-      action: PayloadAction<boolean>,
-    ) => {
+    updateDisplaySpeechSettingOptionsModal: (state, action: PayloadAction<boolean>) => {
       state.showSpeechSettingOptionsModal = action.payload;
     },
+    updateDisplayInsightsAISettingsModal: (state, action: PayloadAction<boolean>) => {
+      state.showInsightsAISettingsModal = action.payload;
+    },
     updateTotalUnreadChatMsgs: (state) => {
-      if (!state.isActiveChatPanel) {
+      if (state.activeSidePanel !== 'CHAT') {
         state.totalUnreadChatMsgs += 1;
       }
     },
-    updateVirtualBackground: (
-      state,
-      action: PayloadAction<BackgroundConfig>,
-    ) => {
-      state.virtualBackground = action.payload;
-    },
-    updateIsEnabledExtendedVerticalCamView: (
-      state,
-      action: PayloadAction<boolean>,
-    ) => {
+    updateIsEnabledExtendedVerticalCamView: (state, action: PayloadAction<boolean>) => {
       state.isEnabledExtendedVerticalCamView = action.payload;
     },
   },
 });
 
 export const {
+  setActiveSidePanel,
   updateIsActiveMicrophone,
   updateIsMicMuted,
   updateIsActiveWebcam,
-  updateIsActiveChatPanel,
-  updateIsActiveParticipantsPanel,
-  updateIsActivePollsPanel,
+  updateIsWebcamMuted,
   updateIsActiveRaisehand,
   updateIsActiveRecording,
   updateIsActiveScreenshare,
   updateIsActiveSharedNotePad,
   updateIsActiveWhiteboard,
+  updateIsActiveInsightsAiTextChat,
   updateShowMicrophoneModal,
   updateShowVideoShareModal,
   updateShowLockSettingsModal,
@@ -220,10 +169,10 @@ export const {
   updateScreenHeight,
   updateDeviceOrientation,
   updateTotalUnreadChatMsgs,
-  updateVirtualBackground,
   updateDisplaySpeechSettingsModal,
   updateDisplaySpeechSettingOptionsModal,
   updateIsEnabledExtendedVerticalCamView,
+  updateDisplayInsightsAISettingsModal,
 } = bottomIconsSlice.actions;
 
 export default bottomIconsSlice.reducer;

@@ -6,8 +6,46 @@ import { store } from '../store';
 import { participantsSelector } from '../store/slices/participantSlice';
 import { IParticipant } from '../store/slices/interfaces/participant';
 import { IMediaDevice } from '../store/slices/interfaces/roomSettings';
+import sanitizeHtml from 'sanitize-html';
+import { RecorderBotOptions, RoomCreateFeatures } from 'plugnmeet-protocol-js';
+import { PnmConnectionQuality } from './livekit/ConnectionQualityMonitor';
 
 export type inputMediaDeviceKind = 'audio' | 'video' | 'both';
+
+/**
+ * A utility function to safely access values from the configuration.
+ * It prioritizes the new `plugNmeetConfig` object, falls back to a legacy global variable,
+ * and finally uses a provided default value.
+ * @param key The key in the new `plugNmeetConfig` object (e.g., 'defaultWebcamResolution').
+ * @param defaultValue An optional default value to return if no configuration is found.
+ * @param legacyKey An optional legacy global variable name (e.g., 'DEFAULT_WEBCAM_RESOLUTION').
+ * @returns The configuration value.
+ */
+export function getConfigValue<T>(key: string, defaultValue?: T, legacyKey?: string): T {
+  const config = (window as any).plugNmeetConfig;
+
+  // 1. Prioritize the new config object
+  if (config && typeof config === 'object' && key in config) {
+    const value = config[key];
+    if (value !== undefined && value !== null) {
+      return value as T;
+    }
+  }
+
+  // 2. Fallback to legacy global variable if provided
+  if (legacyKey) {
+    const legacyConfig = window as any;
+    if (legacyConfig && typeof legacyConfig === 'object' && legacyKey in legacyConfig) {
+      const value = legacyConfig[legacyKey];
+      if (value !== undefined && value !== null) {
+        return value as T;
+      }
+    }
+  }
+
+  // 3. Return the default value
+  return defaultValue as T;
+}
 
 export const getInputMediaDevices = async (kind: inputMediaDeviceKind) => {
   // 1. Request permissions to get device labels.
@@ -65,7 +103,11 @@ export const sleep = (ms: number) => {
 };
 
 export const getWebcamResolution = () => {
-  const selected = (window as any).DEFAULT_WEBCAM_RESOLUTION ?? 'h720';
+  const selected = getConfigValue<string>(
+    'defaultWebcamResolution',
+    'h720',
+    'DEFAULT_WEBCAM_RESOLUTION',
+  );
   let resolution = VideoPresets.h720.resolution;
 
   switch (selected) {
@@ -102,8 +144,11 @@ export const getWebcamResolution = () => {
 };
 
 export const getScreenShareResolution = () => {
-  const selected =
-    (window as any).DEFAULT_SCREEN_SHARE_RESOLUTION ?? 'h1080fps15';
+  const selected = getConfigValue<string>(
+    'defaultScreenShareResolution',
+    'h1080fps15',
+    'DEFAULT_SCREEN_SHARE_RESOLUTION',
+  );
   let resolution = ScreenSharePresets.h1080fps15.resolution;
 
   switch (selected) {
@@ -128,7 +173,7 @@ export const getScreenShareResolution = () => {
 };
 
 export const getAudioPreset = () => {
-  const selected = (window as any).DEFAULT_AUDIO_PRESET ?? 'music';
+  const selected = getConfigValue<string>('defaultAudioPreset', 'music', 'DEFAULT_AUDIO_PRESET');
   let preset = AudioPresets.music;
 
   switch (selected) {
@@ -208,88 +253,211 @@ export const formatNatsError = (err: any) => {
   return msg;
 };
 
-export const getWhiteboardDonors = (): IParticipant[] => {
+/**
+ * getChatDonors returns the two participants who joined the session earliest.
+ */
+export const getChatDonors = (): IParticipant[] => {
   const s = store.getState();
-  const participants = participantsSelector
-    .selectAll(s)
-    .filter(
-      (participant) => participant.userId !== s.session.currentUser?.userId,
-    );
+  const currentUserId = s.session.currentUser?.userId;
+  const allParticipants = participantsSelector.selectAll(s);
 
-  if (!participants.length) return [];
-  let donors: IParticipant[] = [];
+  // Sort participants by their joinedAt timestamp in ascending order (earliest first).
+  allParticipants.sort((a, b) => a.joinedAt - b.joinedAt);
 
-  if (participants.length > 1) {
-    // we can select one presenter
-    const p = participants.filter((p) => p.metadata.isPresenter);
-    if (p.length > 0) {
-      donors.push(p[0]);
-    }
-    // now select one from other users
-    const others = participants.filter((p) => !p.metadata.isPresenter);
-    if (others.length > 0) {
-      others.sort((a, b) => {
-        return a.joinedAt - b.joinedAt;
-      });
-      // select another 1 user
-      donors.push(others[0]);
-    }
-  } else {
-    donors = participants;
-  }
-
-  return donors;
+  // Return the first two participants other than ourselves.
+  return allParticipants.filter((p) => p.userId !== currentUserId).slice(0, 2);
 };
 
-let emptyStreamTrack: MediaStreamTrack | undefined = undefined;
-export function createEmptyVideoStreamTrack(name: string) {
-  // Reuse the track only if it exists and is still live.
-  if (emptyStreamTrack && emptyStreamTrack.readyState === 'live') {
-    return emptyStreamTrack;
-  }
-
-  const canvas = document.createElement('canvas');
-  canvas.width = VideoPresets.h720.resolution.width;
-  canvas.height = VideoPresets.h720.resolution.height;
-
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    // Set a black background for high contrast.
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    const textString = generateAvatarInitial(name);
-
-    // Style the text for clarity.
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 120px sans-serif';
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'center';
-    ctx.fillText(textString, canvas.width / 2, canvas.height / 2);
-  }
-
-  const canvasStream = canvas.captureStream();
-  [emptyStreamTrack] = canvasStream.getVideoTracks();
-  if (!emptyStreamTrack) {
-    throw Error('Could not get empty media stream video track');
-  }
-
-  return emptyStreamTrack;
-}
-
 export const generateAvatarInitial = (name: string) => {
-  const nameParts = name.trim().split(/\s+/);
-  const firstNameInitial = nameParts[0]?.[0] || '';
-  let lastNameInitial = '';
+  const trimmedName = name.trim();
 
-  if (nameParts.length > 1) {
-    lastNameInitial = nameParts[nameParts.length - 1]?.[0] || '';
-  } else if (nameParts[0]?.length > 1) {
-    lastNameInitial = nameParts[0].slice(-1);
+  // Return nothing for empty names.
+  if (!trimmedName) {
+    return '';
   }
+
+  // Strip parenthesized annotations such as "(Guest)" or "(Host)".
+  const withoutParentheses = trimmedName.replace(/\([^)]*\)/g, ' ').trim();
+  const cleanedName = withoutParentheses || trimmedName;
+
+  // Check if the name contains any digits, which may indicate a phone number.
+  if (/\d/.test(cleanedName)) {
+    const firstChar = cleanedName[0] || '';
+    const lastChar = cleanedName.length > 1 ? cleanedName[cleanedName.length - 1] : '';
+    return `${firstChar}${lastChar}`.toLocaleUpperCase();
+  }
+
+  // Keep only tokens that contain at least one letter or number, so stray
+  // punctuation (e.g. a leftover parenthesis) can't be used as an initial.
+  const nameParts = cleanedName.split(/\s+/).filter((part) => /[\p{L}\p{N}]/u.test(part));
+
+  if (nameParts.length === 0) {
+    return cleanedName[0]?.toLocaleUpperCase() ?? '';
+  }
+
+  if (nameParts.length === 1) {
+    // Single name: use the first two letters ("Jibon" -> "JI").
+    return nameParts[0].slice(0, 2).toLocaleUpperCase();
+  }
+
+  // Full name: use the first letter of the first and last meaningful words.
+  const firstNameInitial = nameParts[0][0] ?? '';
+  const lastNameInitial = nameParts[nameParts.length - 1][0] ?? '';
   return `${firstNameInitial}${lastNameInitial}`.toLocaleUpperCase();
 };
 
 export const isUserRecorder = (userId: string) => {
   return userId === 'RECORDER_BOT' || userId === 'RTMP_BOT';
 };
+
+export const isValidHttpUrl = (url: string) => {
+  try {
+    const newUrl = new URL(url);
+    return newUrl.protocol === 'http:' || newUrl.protocol === 'https:';
+  } catch (e) {
+    console.info('Invalid logout URL:', e);
+  }
+
+  return false;
+};
+
+// for special case SIP
+// our: sip_phoneNumber
+// LK: sip_+phoneNumber
+export const toPlugNmeetUserId = (userId: string) => {
+  if (userId.startsWith('sip_')) {
+    return userId.replace('+', '');
+  }
+  return userId;
+};
+
+// resolves a LiveKit identity to the PRIMARY plugNmeet user id:
+// applies toPlugNmeetUserId, then strips the reserved native-twin suffix.
+// e.g. "user1-native" -> "user1" (see HYBRID_INTEGRATION_ARCHITECTURE.md 6.1)
+export const NATIVE_TWIN_SUFFIX = '-native';
+
+export const toPlugNmeetUserIdPrimary = (userId: string) => {
+  const id = toPlugNmeetUserId(userId);
+  return id.endsWith(NATIVE_TWIN_SUFFIX) ? id.slice(0, id.length - NATIVE_TWIN_SUFFIX.length) : id;
+};
+
+// builds the LiveKit identity of the hybrid native twin for a primary user id
+// (mirrors the server's config.GetNativeTwinIdentity)
+export const toNativeTwinIdentity = (userId: string) => `${userId}${NATIVE_TWIN_SUFFIX}`;
+
+export const toLiveKitUserId = (userId: string) => {
+  if (userId.startsWith('sip_')) {
+    // if phone number hidden then SIP will send random userId
+    // which basically don't need to add + sign
+    if (
+      !store.getState().session.currentRoom.metadata?.roomFeatures?.sipDialInFeatures
+        ?.hidePhoneNumber
+    ) {
+      return userId.replace('sip_', 'sip_+');
+    }
+  }
+  return userId;
+};
+
+export const isFirefoxMobile = () => {
+  const ua = window.navigator.userAgent;
+  const isFirefox = ua.includes('Firefox');
+  const isMobile = ua.includes('Android') || ua.includes('Mobile') || ua.includes('Mobi');
+  return isFirefox && isMobile;
+};
+
+export const cleanHtmlForChat = (rawText: string) => {
+  return sanitizeHtml(rawText, {
+    // Static markup only: no scripts, styles, event handlers or url-bearing
+    // attributes beyond this list; svg/path is the static attachment icon.
+    // oxfmt-ignore
+    allowedTags: ['b', 'i', 'strong', 'em', 'del', 'br', 'hr', 'a', 'span', 'div', 'p', 'ul', 'ol', 'li', 'code', 'pre', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'svg', 'path'],
+    allowedAttributes: {
+      a: ['href', 'target', 'class', 'title'],
+      span: ['class', 'dir'],
+      strong: ['class'],
+      div: ['dir'],
+      p: ['dir'],
+      ul: ['dir'],
+      ol: ['dir', 'start'],
+      li: ['dir'],
+      code: ['class', 'dir'],
+      pre: ['dir'],
+      blockquote: ['dir'],
+      h1: ['dir'],
+      h2: ['dir'],
+      h3: ['dir'],
+      h4: ['dir'],
+      h5: ['dir'],
+      h6: ['dir'],
+      table: ['dir'],
+      thead: ['dir'],
+      tbody: ['dir'],
+      tr: ['dir'],
+      td: ['dir', 'align'],
+      th: ['dir', 'align'],
+      svg: ['xmlns', 'width', 'height', 'viewbox', 'fill'],
+      // oxfmt-ignore
+      path: [ 'd', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin' ],
+    },
+    // Class values are whitelisted: Tailwind utilities ship in the app bundle,
+    // so arbitrary classes in chat markup could spoof the UI. The whitelist
+    // covers the trusted senders: attachment card, linkified urls, poll card,
+    // plus language-* emitted by our own fenced code formatter.
+    // oxfmt-ignore
+    allowedClasses: {
+      a: ['attachment-message', 'flex', 'items-center', 'gap-3', 'break-all', 'text-[#24aef7]', 'hover:underline'],
+      span: ['block', 'flex', 'flex-col', 'items-center', 'items-start', 'justify-between', 'gap-3', 'gap-2', 'gap-1.5', 'min-w-0', 'flex-1', 'break-words', 'break-all', 'overflow-hidden', 'text-start', 'text-sm', 'me-1', 'mb-1', 'font-medium', 'font-semibold', 'uppercase', 'tracking-wide', 'text-Green-700', 'text-Gray-950', 'shrink-0', 'text-xs', 'text-Gray-600', 'text-Gray-700', 'dark:text-dark-text', 'dark:text-white', 'dark:text-Green-300', 'mt-1.5', 'mt-2', 'border-t', 'border-Gray-200', 'pt-2', 'dark:border-Gray-700', 'h-10', 'w-10', 'rounded', 'rounded-lg', 'rounded-full', 'rounded-xl', 'bg-Gray-50', 'bg-Green-100', 'bg-white', 'dark:bg-Gray-700', 'dark:bg-Gray-800', 'dark:bg-Green-900', 'px-2', 'px-1.5', 'px-2.5', 'py-0.5', 'py-1.5', 'justify-center'],
+      strong: ['block', 'break-words', 'break-all', 'overflow-hidden', 'text-sm', 'font-semibold', 'text-Gray-950', 'dark:text-white'],
+      code: [/^language-[a-z0-9+-]+$/],
+    },
+    allowedSchemes: ['http', 'https', 'mailto', 'tel'],
+  });
+};
+
+export const getRecorderBotOptions = (
+  currentUserId: string,
+  roomFeatures: RoomCreateFeatures,
+): RecorderBotOptions | undefined => {
+  switch (currentUserId) {
+    case 'RECORDER_BOT':
+      return roomFeatures?.recordingFeatures?.recorderBotOptions;
+    case 'RTMP_BOT':
+      return roomFeatures?.externalBroadcastingFeatures?.recorderBotOptions;
+    default:
+      return undefined;
+  }
+};
+
+export const getConnectionQualityColor = (quality: PnmConnectionQuality) => {
+  switch (quality) {
+    case PnmConnectionQuality.Excellent:
+      return '#22c55e';
+    case PnmConnectionQuality.Good:
+      return '#84cc16';
+    case PnmConnectionQuality.Poor:
+      return '#f97316';
+    case PnmConnectionQuality.Lost:
+      return '#ef4444';
+    default:
+      return '#9ca3af';
+  }
+};
+
+export function uint8ToBase64(bytes: Uint8Array): string {
+  const chunkSize = 0x2000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+export function base64ToUint8(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}

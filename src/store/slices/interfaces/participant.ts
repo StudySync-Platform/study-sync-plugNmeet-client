@@ -1,4 +1,4 @@
-import { ConnectionQuality } from 'livekit-client';
+import { PnmConnectionQuality } from '../../../helpers/livekit/ConnectionQualityMonitor';
 import { ICurrentUserMetadata } from './session';
 
 export interface IParticipant {
@@ -11,10 +11,18 @@ export interface IParticipant {
   videoTracks: number;
   screenShareTrack: number;
   isMuted: boolean;
-  connectionQuality: ConnectionQuality;
+  connectionQuality: PnmConnectionQuality;
   isLocal: boolean;
   joinedAt: number;
   visibility: string;
   pinWebcam?: boolean;
   isOnline: boolean;
+}
+
+export interface IVisibleParticipantInfo {
+  userId: string;
+  name: string;
+  isAdmin: boolean;
+  waitForApproval: boolean;
+  profilePic?: string;
 }

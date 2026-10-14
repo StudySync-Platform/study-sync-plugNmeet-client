@@ -17,7 +17,7 @@ export const useEndPoll = () => {
       if (closePollRes.status) {
         dispatch(
           addUserNotification({
-            message: t('polls.end-poll-success'),
+            message: t('polls.notifications.end-poll-success'),
             typeOption: 'info',
           }),
         );
